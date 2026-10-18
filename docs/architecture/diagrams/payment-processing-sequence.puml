@@ -1,0 +1,58 @@
+@startuml
+title Асинхронная обработка платежа
+
+actor "Клиент" as Client
+boundary "Payment API" as API
+database "PostgreSQL\n(payments, outbox)" as DB
+participant "Публикатор outbox\n(логическая роль)" as Publisher
+queue "RabbitMQ\npayments.new" as Queue
+participant "Payment consumer" as Consumer
+participant "Платежный шлюз\n(эмуляция)" as Gateway
+participant "Webhook клиента" as Webhook
+queue "DLQ" as DLQ
+
+Client -> API: POST /api/v1/payments\nX-API-Key, Idempotency-Key (обязательные заголовки), данные платежа
+alt API-ключ недействителен
+  API --> Client: 401 Unauthorized - Отказ в доступе
+else Idempotency-Key отсутствует
+  API --> Client: 400 Bad Request - Ошибка: обязательный заголовок отсутствует
+else Оба заголовка действительны
+  API -> DB: Найти платеж по Idempotency-Key
+  alt Платеж уже существует
+    DB --> API: Существующий платеж
+    API --> Client: Ответ без создания дубля
+  else Новый платеж
+    API -> DB: В одной транзакции сохранить payment (pending)\nи событие в outbox
+    DB --> API: payment_id, created_at
+    API --> Client: 201 Created, payment_id, pending, created_at
+  end
+end
+
+opt Создан новый платеж
+  loop Пока событие outbox не опубликовано
+    Publisher -> DB: Прочитать ожидающее событие
+    DB --> Publisher: Событие о новом платеже
+    Publisher ->> Queue: Опубликовать в payments.new
+    Queue --> Publisher: Подтверждение публикации
+    Publisher -> DB: Отметить публикацию
+  end
+
+  Queue ->> Consumer: Сообщение о новом платеже
+  Consumer -> Gateway: Эмулировать обработку (2–5 с)
+  alt Успех платежа (90%)
+    Gateway --> Consumer: succeeded
+    Consumer -> DB: Обновить статус на succeeded\nи дату обработки
+  else Неуспех платежа (10%)
+    Gateway --> Consumer: failed
+    Consumer -> DB: Обновить статус на failed\nи дату обработки
+  end
+
+  loop Пока webhook не доставлен: до 3 попыток с экспоненциальной задержкой
+    Consumer ->> Webhook: Уведомить о результате
+    Webhook --> Consumer: Доставлено или ошибка
+  end
+  opt Webhook не доставлен после 3 попыток
+    Consumer ->> DLQ: Направить необработанное сообщение в DLQ
+  end
+end
+@enduml
