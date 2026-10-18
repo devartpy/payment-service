@@ -1,4 +1,4 @@
-# fastapi-ms-template
+# payment-service
 
 > Модульный шаблон FastAPI с DDD, PostgreSQL, Alembic и структурированными логами.
 

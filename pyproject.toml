@@ -3,9 +3,9 @@ requires = ["setuptools>=80,<82"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fastapi-ms-template"
+name = "payment-service"
 version = "0.1.0"
-description = "Reusable FastAPI microservice template"
+description = "Asynchronous payment processing microservice"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,11 +16,11 @@ dependencies = [
     "sqlalchemy>=2.0,<3",
     "structlog>=25,<27",
     "uvicorn[standard]>=0.34,<1",
+    "faststream[rabbit]>=0.7,<1",
 ]
 
 [project.optional-dependencies]
 redis = ["redis>=5,<7"]
-rabbitmq = ["aio-pika>=9,<10"]
 kafka = ["aiokafka>=0.11,<1"]
 
 [dependency-groups]

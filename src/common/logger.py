@@ -15,6 +15,13 @@ def get_default_trace_id() -> str:
     return str(uuid.uuid4())
 
 
+def normalize_uvicorn_logger_name(_logger: Any, _method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+    """Показать служебный канал uvicorn.error как логи сервера, сохранив уровень записи."""
+    if event_dict.get("logger") == "uvicorn.error":
+        event_dict["logger"] = "uvicorn.server"
+    return event_dict
+
+
 def setup_logger(service_name: str) -> None:
     """Настроить логирование процесса с именем его точки запуска."""
     if not service_name.strip():
@@ -38,6 +45,7 @@ def setup_logger(service_name: str) -> None:
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
+        normalize_uvicorn_logger_name,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         add_service_name,
