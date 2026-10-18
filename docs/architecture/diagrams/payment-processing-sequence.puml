@@ -24,7 +24,7 @@ else Оба заголовка действительны
   else Новый платеж
     API -> DB: В одной транзакции сохранить payment (pending)\nи событие в outbox
     DB --> API: payment_id, created_at
-    API --> Client: 201 Created, payment_id, pending, created_at
+    API --> Client: 202 Accepted, payment_id, pending, created_at
   end
 end
 
@@ -51,7 +51,7 @@ opt Создан новый платеж
     Consumer ->> Webhook: Уведомить о результате
     Webhook --> Consumer: Доставлено или ошибка
   end
-  opt Webhook не доставлен после 3 попыток
+  opt Сообщение не обработано после 3 попыток
     Consumer ->> DLQ: Направить необработанное сообщение в DLQ
   end
 end

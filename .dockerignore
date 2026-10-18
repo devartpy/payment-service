@@ -19,3 +19,5 @@ docs
 .agents
 .ai-architect
 .ai-factory.json
+.ai-factory/
+AGENTS.md
