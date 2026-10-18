@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Ruff, tests, package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          # Match the Python version selected for the service and Dockerfile.
+          python-version: "3.10"
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Check lock file and sync
+        shell: bash
+        run: |
+          if [[ -f uv.lock ]]; then
+            uv lock --check
+          elif [[ "$GITHUB_REPOSITORY" == "devartpy/fastapi-ms-template" ]]; then
+            # The source template intentionally has no lock file.
+            uv lock
+          else
+            echo "::error::Commit uv.lock before opening a pull request."
+            exit 1
+          fi
+          # Add the service's selected --extra flags here when needed by tests.
+          uv sync --locked
+
+      - name: Ruff lint
+        run: uv run --locked ruff check .
+
+      - name: Ruff format
+        run: uv run --locked ruff format --check .
+
+      - name: Tests
+        run: uv run --locked pytest
+
+      - name: Build package
+        run: uv build
