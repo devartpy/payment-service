@@ -15,3 +15,7 @@ docs
 .env.*
 !.env.example
 *.log
+
+.agents
+.ai-architect
+.ai-factory.json
