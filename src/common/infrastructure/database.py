@@ -7,7 +7,11 @@ from src.common.configs import get_db_config
 
 def create_engine() -> AsyncEngine:
     """Создать движок при инициализации процесса, использующего БД."""
-    return create_async_engine(get_db_config().async_url, pool_pre_ping=True)
+    return create_async_engine(
+        get_db_config().async_url,
+        connect_args={"server_settings": {"timezone": "UTC"}},
+        pool_pre_ping=True,
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

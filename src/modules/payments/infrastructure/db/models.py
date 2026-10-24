@@ -30,8 +30,10 @@ class Payment(BaseModel):
     # Уникальный ключ для защиты от повторных запросов
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     webhook_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (UniqueConstraint("idempotency_key", name="uq_payments_idempotency_key"),)
 
@@ -43,4 +45,6 @@ class OutboxEvent(BaseModel):
         SQLEnum(OutboxEventType, native_enum=True, name="outbox_event_type_enum"), nullable=False
     )
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )

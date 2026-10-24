@@ -62,7 +62,11 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     """Создать отдельный движок только на время выполнения миграции."""
-    connectable = create_async_engine(db_config.async_url, poolclass=NullPool)
+    connectable = create_async_engine(
+        db_config.async_url,
+        connect_args={"server_settings": {"timezone": "UTC"}},
+        poolclass=NullPool,
+    )
     try:
         async with connectable.connect() as connection:
             await connection.run_sync(do_run_migrations)
@@ -73,7 +77,11 @@ async def run_async_migrations() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
 
-    asyncio.run(run_async_migrations())
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        do_run_migrations(connection)
+    else:
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():
