@@ -2,7 +2,7 @@
 
 > Разработка микросервиса для асинхронной обработки платежей на FastAPI, PostgreSQL и RabbitMQ.
 
-Репозиторий уже содержит запускаемый HTTP-каркас, настройки БД, логирование и границы платёжного модуля. [Требования к сервису](docs/project.md) и [диаграмма последовательности](docs/architecture/diagrams/payment-processing-sequence.puml) описывают целевое поведение. Создание платежей, consumer, outbox publisher и webhook пока не реализованы.
+Репозиторий содержит запускаемый HTTP-каркас, настройки БД, логирование, доменные и ORM-модели платежа и черновую миграцию. [Требования к сервису](docs/project.md) и [диаграмма последовательности](docs/architecture/diagrams/payment-processing-sequence.puml) описывают целевое поведение. Платёжные маршруты, publisher, consumer и webhook пока не реализованы.
 
 ## Структура проекта
 
@@ -10,10 +10,10 @@
 src/
 ├── api/                 сборка FastAPI, общий маршрутизатор, Trace ID
 ├── common/              настройки, логирование, БД, Unit of Work
-└── modules/payment/     каркас домена, сценариев, инфраструктуры и HTTP API
-alembic/                 окружение и шаблон миграций
+└── modules/payments/    доменные и ORM-модели; каркас сценариев и HTTP API
+alembic/                 окружение и черновая миграция таблиц платежей
 tests/common/            действующие тесты общей инфраструктуры
-tests/payment/           каталоги для будущих тестов платежей
+tests/payments/          каталоги для будущих тестов платежей
 docs/                    требования, руководство и архитектура
 ```
 
@@ -44,8 +44,8 @@ Invoke-WebRequest http://127.0.0.1:8000/openapi.json | Select-Object -ExpandProp
 ## Планируемый платёжный процесс
 
 - `POST /api/v1/payments` принимает обязательные `X-API-Key` и `Idempotency-Key`, создаёт платёж и возвращает `202 Accepted`; `GET /api/v1/payments/{payment_id}` выдаёт его состояние.
-- Платёж и outbox-событие сохраняются в одной транзакции; publisher публикует событие в RabbitMQ и отмечает его после подтверждения брокера.
-- Consumer обрабатывает сообщение, сохраняет результат и отправляет webhook. Для webhook предусмотрены три попытки с экспоненциальной задержкой; необработанные сообщения направляются в DLQ по отдельной политике.
+- API сохраняет `Payment(NEW)` и OutboxEvent в одной транзакции. Publisher публикует событие в `payments.new`; после подтверждения RabbitMQ он одной транзакцией переводит платёж `NEW → PENDING` и удаляет запись outbox.
+- Один consumer обрабатывает `PENDING` через идемпотентный шлюз, сохраняет конечный статус `SUCCEEDED` или `FAILED` и отправляет webhook. Для webhook допускаются три попытки при сбое сети, таймауте или `5xx`; при `4xx` либо исчерпании попыток исходное сообщение попадает в `payments.dlq`.
 
 Эти пункты — требования, не доступные сейчас функции API. Детали и критерии готовности указаны в [задании](docs/project.md).
 
@@ -58,7 +58,7 @@ Invoke-WebRequest http://127.0.0.1:8000/openapi.json | Select-Object -ExpandProp
 | [Архитектура](docs/architecture.md) | Структура модулей, зависимости и транзакции. |
 | [Переменные окружения](docs/environment-variables.md) | Параметры API, PostgreSQL и логирования. |
 
-Диаграмма: [последовательность обработки платежа](docs/architecture/diagrams/payment-processing-sequence.puml).
+Диаграммы: [последовательность](docs/architecture/diagrams/payment-processing-sequence.puml), [обработка consumer](docs/architecture/diagrams/payment-consumer-activity.puml), [контейнеры](docs/architecture/diagrams/payment-service-container.puml).
 
 ## Лицензия
 

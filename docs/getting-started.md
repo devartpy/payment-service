@@ -75,14 +75,13 @@ CI выполняет эти проверки для pull request. На Windows 
 
 ## Миграции
 
-`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. В платёжном модуле таблиц пока нет; Alembic запрещает `--autogenerate`, пока не появится хотя бы одна модель. После добавления моделей и запуска PostgreSQL:
+`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. Модели `payments` и `outbox_events` и черновая ревизия для них уже есть в `alembic/versions/`. После запуска PostgreSQL просмотрите `upgrade()` и `downgrade()` этой ревизии и примените её:
 
 ```powershell
-uv run --locked alembic revision --autogenerate -m "create_payment_tables"
 uv run --locked alembic upgrade head
 ```
 
-Перед применением прочитайте `upgrade()` и `downgrade()` новой ревизии. Команды Alembic используют переменные `DB_*` из окружения или `.env`; локальный адрес БД по умолчанию — `localhost:5432`. Миграции выполняются отдельным шагом, а не при старте API.
+Новые ревизии создавайте после следующих изменений моделей командой `uv run --locked alembic revision --autogenerate -m "update_payment_tables"`, проверяя сгенерированный код до применения. Команды Alembic используют переменные `DB_*` из окружения или `.env`; локальный адрес БД по умолчанию — `localhost:5432`. Миграции выполняются отдельным шагом, а не при старте API.
 
 ## See Also
 

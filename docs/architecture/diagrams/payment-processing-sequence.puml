@@ -9,7 +9,7 @@ queue "RabbitMQ\npayments.new" as Queue
 participant "Payment consumer" as Consumer
 participant "Платежный шлюз\n(эмуляция)" as Gateway
 participant "Webhook клиента" as Webhook
-queue "DLQ" as DLQ
+queue "RabbitMQ\npayments.dlq" as DLQ
 
 Client -> API: POST /api/v1/payments\nX-API-Key, Idempotency-Key (обязательные заголовки), данные платежа
 alt API-ключ недействителен
@@ -22,37 +22,68 @@ else Оба заголовка действительны
     DB --> API: Существующий платеж
     API --> Client: Ответ без создания дубля
   else Новый платеж
-    API -> DB: В одной транзакции сохранить payment (pending)\nи событие в outbox
+    API -> DB: В одной транзакции сохранить Payment (NEW)\nи OutboxEvent
     DB --> API: payment_id, created_at
-    API --> Client: 202 Accepted, payment_id, pending, created_at
+    API --> Client: 202 Accepted, payment_id, NEW, created_at
   end
 end
 
 opt Создан новый платеж
-  loop Пока событие outbox не опубликовано
-    Publisher -> DB: Прочитать ожидающее событие
+  loop Пока OutboxEvent существует
+    Publisher -> DB: Прочитать ожидающий OutboxEvent
     DB --> Publisher: Событие о новом платеже
     Publisher ->> Queue: Опубликовать в payments.new
-    Queue --> Publisher: Подтверждение публикации
-    Publisher -> DB: Отметить публикацию
+    opt Ранняя доставка при статусе NEW
+      Queue ->> Consumer: Сообщение о новом платеже
+      Consumer -> DB: Прочитать статус Payment
+      DB --> Consumer: NEW
+      Consumer -> Queue: nack(requeue=true)\nбез вызова шлюза
+    end
+    alt Сообщение маршрутизировано и подтверждено RabbitMQ
+      Queue --> Publisher: Publisher confirm
+      Publisher -> DB: В одной транзакции Payment NEW → PENDING\nи удалить OutboxEvent
+      note right of Publisher
+        Если транзакция БД не завершилась,
+        OutboxEvent остаётся для новой публикации.
+      end note
+    else Нет подтверждения публикации
+      Publisher -> DB: Оставить OutboxEvent для повтора
+    end
   end
 
-  Queue ->> Consumer: Сообщение о новом платеже
-  Consumer -> Gateway: Эмулировать обработку (2–5 с)
-  alt Успех платежа (90%)
-    Gateway --> Consumer: succeeded
-    Consumer -> DB: Обновить статус на succeeded\nи дату обработки
-  else Неуспех платежа (10%)
-    Gateway --> Consumer: failed
-    Consumer -> DB: Обновить статус на failed\nи дату обработки
+  Queue ->> Consumer: Доставить или повторно доставить сообщение
+  Consumer -> DB: Прочитать Payment по payment_id
+  DB --> Consumer: NEW, PENDING, SUCCEEDED или FAILED
+  alt Статус NEW
+    Consumer -> Queue: nack(requeue=true)\nбез вызова шлюза
+  else Статус PENDING
+    Consumer -> Gateway: Эмулировать платёж (2–5 с)\nс Idempotency-Key
+    alt Успех платежа (90%)
+      Gateway --> Consumer: succeeded
+      Consumer -> DB: Сохранить SUCCEEDED и дату обработки
+    else Неуспех платежа (10%)
+      Gateway --> Consumer: failed
+      Consumer -> DB: Сохранить FAILED и дату обработки
+    end
+  else Статус SUCCEEDED или FAILED
+    note right of Consumer: Не вызывать шлюз повторно
   end
 
-  loop Пока webhook не доставлен: до 3 попыток с экспоненциальной задержкой
-    Consumer ->> Webhook: Уведомить о результате
-    Webhook --> Consumer: Доставлено или ошибка
-  end
-  opt Сообщение не обработано после 3 попыток
-    Consumer ->> DLQ: Направить необработанное сообщение в DLQ
+  opt Статус SUCCEEDED или FAILED
+    Consumer -> DB: Прочитать актуальный конечный статус
+    loop До 3 попыток; повтор с экспоненциальной задержкой\nтолько после сети, таймаута или 5xx
+      Consumer -> Webhook: POST результат платежа на URL мерчанта
+      Webhook --> Consumer: 200, 4xx или сеть / таймаут / 5xx
+    end
+    alt Ответ 200 OK
+      Consumer -> Queue: ack исходного сообщения
+    else Ответ 4xx
+      Consumer -> Queue: nack(requeue=false) исходного сообщения
+      Queue ->> DLQ: Передать через dead-letter exchange
+    else Сеть, таймаут или 5xx после 3 попыток
+      Consumer -> Queue: nack(requeue=false) исходного сообщения
+      Queue ->> DLQ: Передать через dead-letter exchange
+    end
   end
 end
 @enduml

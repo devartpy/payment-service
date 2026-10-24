@@ -1,0 +1,48 @@
+@startuml
+title Payment consumer — целевой процесс
+
+start
+:Получить исходное сообщение из payments.new;
+:Прочитать Payment по payment_id;
+
+if (Статус NEW?) then (да)
+  :Не вызывать шлюз;
+  :nack(requeue=true) — вернуть сообщение в очередь;
+  stop
+endif
+
+if (Статус PENDING?) then (да)
+  :Эмулировать платёж с Idempotency-Key\n(2–5 секунд, один результат);
+  if (Платёж успешен?) then (да, 90%)
+    :Сохранить SUCCEEDED (конечный)\nи дату обработки;
+  else (нет, 10%)
+    :Сохранить FAILED (конечный)\nи дату обработки;
+  endif
+else (SUCCEEDED или FAILED)
+  :Пропустить вызов шлюза;
+endif
+
+:Прочитать актуальный конечный статус из БД;
+:Установить счётчик попыток webhook = 0;
+while (Попыток webhook меньше 3?) is (да)
+  :Отправить HTTP POST webhook;
+  :Увеличить счётчик попыток webhook;
+  if (Ответ 200 OK?) then (да)
+    :ack исходного сообщения;
+    stop
+  else (нет)
+    if (Ответ 4xx?) then (да)
+      :nack(requeue=false) исходного сообщения;
+      :RabbitMQ переводит его в payments.dlq через DLX;
+      stop
+    else (сеть, таймаут или 5xx)
+      if (Остались попытки?) then (да)
+        :Выждать экспоненциальную задержку;
+      endif
+    endif
+  endif
+endwhile (нет)
+:nack(requeue=false) исходного сообщения;
+:RabbitMQ переводит его в payments.dlq через DLX;
+stop
+@enduml
