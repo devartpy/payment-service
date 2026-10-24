@@ -1,4 +1,4 @@
-[← Архитектура](architecture.md) · [К README](../README.md)
+[← Архитектура](architecture.md) · [К README](../README.md) · [Требования →](project.md)
 
 # Переменные окружения
 
@@ -8,7 +8,7 @@
 Copy-Item .env.example .env
 ```
 
-`DB_USER` и `DB_PASSWORD` обязательны при создании `DatabaseConfig`. Текущий HTTP-каркас соединение с базой ещё не создаёт; команды Alembic читают эти переменные и требуют доступной PostgreSQL при создании миграции через `--autogenerate` и её применении. Остальные переменные имеют значения по умолчанию. Значение `DB_PASSWORD=change-me` в примере нужно заменить до подключения БД. Не храните рабочие пароли в Git.
+`DB_USER` и `DB_PASSWORD` обязательны при создании `DatabaseConfig`; `API_KEY` обязателен при создании `FastAPIConfig`. API создаёт движок и фабрику сессий на время работы процесса, а платёжные запросы используют доступную PostgreSQL. Команды Alembic тоже читают `DB_*`. Замените `DB_PASSWORD=change-me` и `API_KEY=replace-with-a-secret` в примере. Не храните рабочие секреты в Git.
 
 ## Приложение и логирование
 
@@ -43,6 +43,7 @@ Copy-Item .env.example .env
 | `FA_OPENAPI_URL` | `/openapi.json` | Путь к схеме OpenAPI. |
 | `FA_DOCS_URL` | `/docs` | Путь к Swagger UI. |
 | `FA_REDOC_URL` | `/redoc` | Путь к ReDoc. |
+| `API_KEY` | нет, обязателен | Статический ключ для проверки заголовка `X-API-Key` на платёжных маршрутах. |
 
 Пример значения списка: `FA_CORS_ORIGINS=["http://localhost:3000","https://example.com"]`. Если список пуст, CORS middleware не подключается. `FA_ENABLE_DOCS=false` отключает схему OpenAPI, Swagger UI и ReDoc при создании приложения.
 
@@ -53,5 +54,5 @@ Copy-Item .env.example .env
 ## See Also
 
 - [Запуск и разработка](getting-started.md) — локальное окружение и Compose.
-- [Архитектура](architecture.md) — правила использования конфигурации и логирования.
+- [REST API](api.md) — как передать ключ при обращении к платежам.
 - [Требования](project.md) — целевые интеграции, которым понадобятся дополнительные настройки.

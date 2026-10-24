@@ -47,6 +47,10 @@ class Payment:
         self.created_at = created_at or datetime.now(timezone.utc)
         self.processed_at = processed_at
 
+    def new_event_payload(self) -> dict[str, str]:
+        """Данные события о создании платежа."""
+        return {"payment_id": str(self.id)}
+
 
 class OutboxEvent:
     """доменная сущность События Outbox."""

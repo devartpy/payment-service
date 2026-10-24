@@ -1,64 +1,55 @@
 # payment-service
 
-> Разработка микросервиса для асинхронной обработки платежей на FastAPI, PostgreSQL и RabbitMQ.
+> Асинхронный платёжный сервис на FastAPI и PostgreSQL с атомарной записью платежа и outbox.
 
-Репозиторий содержит запускаемый HTTP-каркас, настройки БД, логирование, доменные и ORM-модели платежа и черновую миграцию. [Требования к сервису](docs/project.md) и [диаграмма последовательности](docs/architecture/diagrams/payment-processing-sequence.puml) описывают целевое поведение. Платёжные маршруты, publisher, consumer и webhook пока не реализованы.
-
-## Структура проекта
-
-```text
-src/
-├── api/                 сборка FastAPI, общий маршрутизатор, Trace ID
-├── common/              настройки, логирование, БД, Unit of Work
-└── modules/payments/    доменные и ORM-модели; каркас сценариев и HTTP API
-alembic/                 окружение и черновая миграция таблиц платежей
-tests/common/            действующие тесты общей инфраструктуры
-tests/payments/          каталоги для будущих тестов платежей
-docs/                    требования, руководство и архитектура
-```
-
-Точка входа — `src.api.main:app`. Маршрутизатор `src/api/main_router.py` пока не содержит платёжных эндпоинтов. Подробное назначение слоёв — в [архитектуре](docs/architecture.md).
+Сервис принимает платежи по HTTP и позволяет читать их состояние. При создании он сохраняет платёж со статусом `new` и событие outbox в одной транзакции. Публикация в RabbitMQ, обработка платежа и webhook пока не реализованы; полный целевой процесс описан в [требованиях](docs/project.md).
 
 ## Быстрый запуск
 
-Нужны Python 3.10+, [uv](https://docs.astral.sh/uv/getting-started/installation/) и PowerShell. Из корня репозитория:
+Нужны Python 3.10+, `uv`, PowerShell и доступная PostgreSQL. Из корня проекта:
 
 ```powershell
 Copy-Item .env.example .env
+```
+
+Задайте в `.env` рабочие `DB_PASSWORD` и `API_KEY`, затем выполните:
+
+```powershell
 uv sync --python 3.10 --locked
+docker compose up -d db --wait
+uv run --locked alembic upgrade head
 uv run --locked uvicorn src.api.main:app --reload
 ```
 
-Замените `DB_PASSWORD=change-me` в `.env` до подключения БД. Откройте `http://127.0.0.1:8000/docs`: Swagger UI работает уже сейчас, но маршрутов платежей в нём пока нет. Для контейнерного запуска и проверок см. [руководство по запуску](docs/getting-started.md).
-
-## Проверка работающего каркаса
-
-При запущенном API выполните:
+Для создания платежа в другом окне PowerShell:
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:8000/openapi.json | Select-Object -ExpandProperty StatusCode
+$apiKey = (Get-Content .env | Where-Object { $_ -like 'API_KEY=*' } | Select-Object -First 1) -replace '^API_KEY=', ''
+$headers = @{ "X-API-Key" = $apiKey; "Idempotency-Key" = "example-001" }
+$body = @{ amount = "12.50"; currency = "RUB"; description = "Заказ 1"; metadata = @{ order = "1" }; webhook_url = "https://merchant.example/hook" } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/payments -Headers $headers -ContentType application/json -Body $body
 ```
 
-Ожидаемый ответ — `200`. Это проверяет HTTP-приложение, а не целевой сценарий платежа.
+Ответ содержит `payment_id`, `status: "new"` и `created_at` в UTC. Повтор с тем же `Idempotency-Key` возвращает `409`. Пример чтения и полный формат ошибок приведены в [справочнике API](docs/api.md).
 
-## Планируемый платёжный процесс
+## Что работает
 
-- `POST /api/v1/payments` принимает обязательные `X-API-Key` и `Idempotency-Key`, создаёт платёж и возвращает `202 Accepted`; `GET /api/v1/payments/{payment_id}` выдаёт его состояние.
-- API сохраняет `Payment(NEW)` и OutboxEvent в одной транзакции. Publisher публикует событие в `payments.new`; после подтверждения RabbitMQ он одной транзакцией переводит платёж `NEW → PENDING` и удаляет запись outbox.
-- Один consumer обрабатывает `PENDING` через идемпотентный шлюз, сохраняет конечный статус `SUCCEEDED` или `FAILED` и отправляет webhook. Для webhook допускаются три попытки при сбое сети, таймауте или `5xx`; при `4xx` либо исчерпании попыток исходное сообщение попадает в `payments.dlq`.
-
-Эти пункты — требования, не доступные сейчас функции API. Детали и критерии готовности указаны в [задании](docs/project.md).
+- `POST /api/v1/payments` и `GET /api/v1/payments/{payment_id}` с проверкой `X-API-Key`.
+- Обязательный `Idempotency-Key` для POST и отказ при повторном использовании ключа.
+- Общий формат ошибок и атомарный `commit` платежа с outbox через SQLAlchemy Unit of Work.
+- Интеграционные и HTTP-тесты на PostgreSQL с изоляцией во временных схемах.
 
 ## Документация
 
 | Раздел | Описание |
 | --- | --- |
-| [Требования](docs/project.md) | Целевой процесс платежа и критерии результата. |
-| [Запуск и разработка](docs/getting-started.md) | Окружение, Docker Compose, проверки и миграции. |
-| [Архитектура](docs/architecture.md) | Структура модулей, зависимости и транзакции. |
-| [Переменные окружения](docs/environment-variables.md) | Параметры API, PostgreSQL и логирования. |
+| [Запуск и разработка](docs/getting-started.md) | Окружение, Compose, миграции и тесты. |
+| [REST API](docs/api.md) | Запросы, ответы и ошибки платежей. |
+| [Архитектура](docs/architecture.md) | Слои, транзакции и целевые интеграции. |
+| [Переменные окружения](docs/environment-variables.md) | Настройки API, БД и логирования. |
+| [Требования](docs/project.md) | Полный целевой сценарий и критерии. |
 
-Диаграммы: [последовательность](docs/architecture/diagrams/payment-processing-sequence.puml), [обработка consumer](docs/architecture/diagrams/payment-consumer-activity.puml), [контейнеры](docs/architecture/diagrams/payment-service-container.puml).
+Диаграммы: [последовательность](docs/architecture/diagrams/payment-processing-sequence.puml), [consumer](docs/architecture/diagrams/payment-consumer-activity.puml), [контейнеры](docs/architecture/diagrams/payment-service-container.puml).
 
 ## Лицензия
 

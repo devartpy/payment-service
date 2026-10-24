@@ -12,3 +12,4 @@ class FastAPIConfig(CommonConfig):
     openapi_url: str = Field(default="/openapi.json", validation_alias="FA_OPENAPI_URL")
     docs_url: str = Field(default="/docs", validation_alias="FA_DOCS_URL")
     redoc_url: str = Field(default="/redoc", validation_alias="FA_REDOC_URL")
+    api_key: str = Field(validation_alias="API_KEY", min_length=1)

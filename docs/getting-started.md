@@ -1,8 +1,8 @@
-[← Требования](project.md) · [К README](../README.md) · [Архитектура →](architecture.md)
+[К README](../README.md) · [REST API →](api.md)
 
 # Запуск и разработка
 
-Инструкции выполняются из корня этого репозитория. Сейчас запускается HTTP-каркас и PostgreSQL; платёжные маршруты, consumer и RabbitMQ ещё не подключены.
+Инструкции выполняются из корня репозитория. POST/GET платежей работают с PostgreSQL; publisher, consumer и RabbitMQ ещё не подключены.
 
 ## Требования
 
@@ -17,7 +17,7 @@
 
 ## Локальный запуск API
 
-1. Создайте конфигурацию и замените учебный пароль `DB_PASSWORD=change-me` в `.env`:
+1. Создайте конфигурацию, замените учебные `DB_PASSWORD=change-me` и `API_KEY=replace-with-a-secret` в `.env`:
 
    ```powershell
    Copy-Item .env.example .env
@@ -29,19 +29,26 @@
    uv sync --python 3.10 --locked
    ```
 
-3. Запустите приложение:
+3. Запустите PostgreSQL и примените миграции:
+
+   ```powershell
+   docker compose up -d db --wait
+   uv run --locked alembic upgrade head
+   ```
+
+4. Запустите приложение:
 
    ```powershell
    uv run --locked uvicorn src.api.main:app --reload
    ```
 
-4. Откройте `http://127.0.0.1:8000/docs` или проверьте доступность схемы:
+5. Откройте `http://127.0.0.1:8000/docs` или проверьте доступность схемы:
 
    ```powershell
    Invoke-WebRequest http://127.0.0.1:8000/openapi.json | Select-Object -ExpandProperty StatusCode
    ```
 
-   Ожидаемый код — `200`. Список платежных операций в OpenAPI пока пуст: маршрутизатор `src/api/main_router.py` ещё не подключает бизнес-маршруты. Остановите Uvicorn клавишами `Ctrl+C`.
+   Ожидаемый код — `200`. В OpenAPI есть POST и GET платежей. Пример создания и чтения — в [REST API](api.md). Остановите Uvicorn клавишами `Ctrl+C`.
 
 ## Запуск через Docker Compose
 
@@ -52,13 +59,13 @@ docker compose up -d --build --wait
 docker compose ps
 ```
 
-Compose поднимает `api` и `db` и ждёт готовности PostgreSQL перед запуском API. Swagger UI доступен на `http://127.0.0.1:8000/docs`. Для остановки без удаления данных:
+Compose поднимает `api` и `db` и ждёт готовности PostgreSQL перед запуском API. Примените миграции отдельной командой с хоста: `uv run --locked alembic upgrade head`. Swagger UI доступен на `http://127.0.0.1:8000/docs`. Для остановки без удаления данных:
 
 ```powershell
 docker compose down
 ```
 
-В Compose пока нет RabbitMQ, consumer и outbox publisher. Контейнер API пока не открывает подключение к БД при старте; готовность PostgreSQL проверяется отдельно.
+В Compose пока нет RabbitMQ, consumer и outbox publisher. API создаёт фабрику асинхронных сессий при старте и использует БД при платёжных запросах; миграции не запускаются автоматически.
 
 Пока используйте `DB_PORT=5432`: текущий Compose не разделяет порт PostgreSQL на хосте и порт подключения внутри контейнера. Причина описана в [переменных окружения](environment-variables.md).
 
@@ -71,11 +78,11 @@ uv run --locked pytest
 uv build
 ```
 
-CI выполняет эти проверки для pull request. На Windows с GNU Make доступны `make lint`, `make test`, `make up`, `make down` и другие цели из `Makefile`.
+CI выполняет эти проверки для pull request и предварительно применяет миграции. Локальные интеграционные и HTTP-тесты используют запущенную PostgreSQL: каждый создаёт собственную временную схему, применяет к ней миграции и удаляет только эту схему. Отдельная тестовая БД или новый контейнер на каждый тест не нужны. На Windows с GNU Make доступны `make lint`, `make test`, `make up`, `make down` и другие цели из `Makefile`.
 
 ## Миграции
 
-`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. Модели `payments` и `outbox_events` и черновая ревизия для них уже есть в `alembic/versions/`. После запуска PostgreSQL просмотрите `upgrade()` и `downgrade()` этой ревизии и примените её:
+`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. Модели `payments` и `outbox_events` и ревизия для них находятся в `alembic/versions/`. На текущем стенде разработки миграции уже применены; для новой БД после запуска PostgreSQL просмотрите `upgrade()` и `downgrade()` ревизии и выполните:
 
 ```powershell
 uv run --locked alembic upgrade head
@@ -85,6 +92,6 @@ uv run --locked alembic upgrade head
 
 ## See Also
 
-- [Требования](project.md) — что предстоит реализовать.
-- [Архитектура](architecture.md) — структура и правила зависимостей.
+- [REST API](api.md) — запросы, ответы и ошибки работающих маршрутов.
+- [Требования](project.md) — оставшийся целевой процесс.
 - [Переменные окружения](environment-variables.md) — значения конфигурации.
