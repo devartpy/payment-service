@@ -2,20 +2,52 @@
 
 # Запуск и разработка
 
-Инструкции выполняются из корня репозитория. API, consumer и publisher работают как отдельные процессы с общей PostgreSQL и RabbitMQ.
+Инструкции выполняются из корня репозитория. Основной запуск — через `make up`: API, consumer и publisher работают как отдельные процессы с общей PostgreSQL и RabbitMQ.
 
 ## Требования
 
 | Инструмент | Для чего нужен |
 | --- | --- |
-| Python 3.10+ | Локальный запуск; Dockerfile и CI используют Python 3.10. |
-| [uv](https://docs.astral.sh/uv/getting-started/installation/) | Установка зависимостей по `uv.lock`. |
+| [GNU Make](https://www.gnu.org/software/make/) | Основные команды запуска и управления стендом. |
 | Docker Desktop с Compose | Контейнеры API, consumer, publisher, PostgreSQL и RabbitMQ. |
 | PowerShell | Команды ниже приведены для Windows. |
+| Python 3.10+ и [uv](https://docs.astral.sh/uv/getting-started/installation/) | Локальная разработка, тесты и создание миграций; для `make up` не нужны. |
 
 `uv.lock` уже входит в репозиторий. При изменении зависимостей обновите его командой `uv lock` и сохраняйте вместе с `pyproject.toml`.
 
-## Локальный запуск API
+## Запуск через Make
+
+1. Скопируйте пример настроек и замените учебные `DB_PASSWORD=change-me`, `RABBITMQ_PASSWORD=change-me` и `API_KEY=replace-with-a-secret`:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+2. Соберите и запустите стенд:
+
+   ```powershell
+   make up
+   ```
+
+   `make up` ждёт готовности PostgreSQL и RabbitMQ, собирает образы, применяет миграции в разовом контейнере и затем запускает API, consumer и publisher. Publisher стартует после успешного healthcheck consumer. Миграции выполняются до старта приложения.
+
+3. Откройте `http://127.0.0.1:8000/docs` или проверьте OpenAPI:
+
+   ```powershell
+   Invoke-WebRequest http://127.0.0.1:8000/openapi.json | Select-Object -ExpandProperty StatusCode
+   ```
+
+   Ожидаемый код — `200`. Пример создания и чтения платежа находится в [REST API](api.md). Для остановки без удаления данных выполните `make down`.
+
+| Команда | Действие |
+| --- | --- |
+| `make up` | Собрать образы, применить миграции и запустить весь стенд. |
+| `make down` | Остановить контейнеры, сохранить тома. |
+| `make restart` | Перезапустить уже созданные контейнеры. |
+| `make upgrade` | Собрать образ API и применить миграции без запуска всех ролей. |
+| `make lint`, `make test`, `make ci` | Проверки для разработки; требуют локальный `uv`. |
+
+## Локальный запуск через uv
 
 1. Создайте конфигурацию, замените учебные `DB_PASSWORD=change-me`, `RABBITMQ_PASSWORD=change-me` и `API_KEY=replace-with-a-secret` в `.env`:
 
@@ -64,51 +96,35 @@
 
    Ожидаемый код — `200`. В OpenAPI есть POST и GET платежей. Пример создания и чтения — в [REST API](api.md). Остановите Uvicorn клавишами `Ctrl+C`.
 
-## Запуск через Docker Compose
-
-После настройки `.env` выполните:
-
-```powershell
-uv sync --python 3.10 --locked
-docker compose up -d db rabbitmq --wait
-uv run --locked alembic upgrade head
-docker compose up -d --build --wait
-docker compose ps
-```
-
-Сначала запускаются PostgreSQL и RabbitMQ и применяются миграции к доступной с хоста БД. Затем Compose поднимает `api`, `consumer` и `publisher`. Healthcheck consumer пассивно проверяет наличие основного exchange и очереди; publisher стартует после этой проверки. Swagger UI доступен на `http://127.0.0.1:8000/docs`. Для остановки без удаления данных:
-
-```powershell
-docker compose down
-```
-
-В Compose consumer использует `faststream run src.consumer.app:app`, publisher — `python -m src.publisher.main`. Каждый процесс создаёт свой SQLAlchemy engine и закрывает его при остановке. Миграции не запускаются автоматически. Publisher разворачивается в одном экземпляре.
+В Compose consumer использует `faststream run src.consumer.app:app`, publisher — `python -m src.publisher.main`. Каждый процесс создаёт свой SQLAlchemy engine и закрывает его при остановке. Publisher разворачивается в одном экземпляре.
 
 `DB_PORT` задаёт порт PostgreSQL на хосте; API, consumer и publisher внутри Compose подключаются к `db:5432`. Подробности приведены в [переменных окружения](environment-variables.md).
 
 ## Проверки
 
 ```powershell
-uv run --locked ruff check .
-uv run --locked ruff format --check .
-uv run --locked pytest
-uv build
+make lint
+make test
+uv run --locked pytest --cov=src --cov-report=term-missing
+make ci
 ```
 
-CI выполняет эти проверки для pull request и предварительно применяет миграции. Локальные интеграционные и HTTP-тесты используют запущенную PostgreSQL: каждый создаёт собственную временную схему, применяет к ней миграции и удаляет только эту схему. Тесты consumer и publisher используют один запущенный RabbitMQ и отдельные очереди/exchange для каждого теста, которые удаляются после него. Отдельная тестовая БД или новый контейнер на каждый тест не нужны. Для полного локального прогона запустите `docker compose up -d db rabbitmq --wait`. На Windows с GNU Make доступны `make lint`, `make test`, `make up`, `make down` и другие цели из `Makefile`.
+`make lint` и `make test` используют локальный `uv`. `make ci` запускает эти проверки и собирает образ API. Команда с `--cov` показывает общий процент покрытия в строке `TOTAL` и непроверенные строки в столбце `Missing`. В GitHub CI отдельно выполняются Ruff, pytest и сборка Python-пакета для pull request; отчёт покрытия пока создаётся только локальной командой.
+
+Локальные интеграционные и HTTP-тесты используют запущенную PostgreSQL: каждый создаёт собственную временную схему, применяет к ней миграции и удаляет только эту схему. Тесты consumer и publisher используют один запущенный RabbitMQ и отдельные очереди/exchange для каждого теста, которые удаляются после него. Отдельная тестовая БД или новый контейнер на каждый тест не нужны. Перед полным локальным прогоном выполните `make infra-up`.
 
 ## Миграции
 
-`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. Модели `payments` и `outbox_events` и ревизия для них находятся в `alembic/versions/`. Для новой БД после запуска PostgreSQL просмотрите `upgrade()` и `downgrade()` ревизии и выполните:
+`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. Модели `payments` и `outbox_events` и ревизия для них находятся в `alembic/versions/`. `make up` применяет миграции перед запуском приложения. Чтобы применить их отдельно, выполните:
 
 ```powershell
-uv run --locked alembic upgrade head
+make upgrade
 ```
 
-Новые ревизии создавайте после следующих изменений моделей командой `uv run --locked alembic revision --autogenerate -m "update_payment_tables"`, проверяя сгенерированный код до применения. Команды Alembic используют переменные `DB_*` из окружения или `.env`; локальный адрес БД по умолчанию — `localhost:5432`. Миграции выполняются отдельным шагом, а не при старте API.
+Для новой ревизии используйте `make migration m=update_payment_tables` и проверьте сгенерированные `upgrade()` и `downgrade()` до применения. Эта команда требует локальный `uv`; прямой вариант — `uv run --locked alembic revision --autogenerate -m "update_payment_tables"`. Alembic читает `DB_*` из окружения или `.env`; локальный адрес БД по умолчанию — `localhost:5432`.
 
 ## See Also
 
 - [REST API](api.md) — запросы, ответы и ошибки работающих маршрутов.
-- [Требования](project.md) — оставшийся целевой процесс.
+- [Архитектура](architecture.md) — жизненный цикл платежа и доставка событий.
 - [Переменные окружения](environment-variables.md) — значения конфигурации.

@@ -4,11 +4,11 @@
 
 Сервис принимает платежи по HTTP и позволяет читать их состояние. При создании он сохраняет платёж со статусом `pending` и событие outbox в одной транзакции. Отдельный consumer обрабатывает опубликованное событие, сохраняет конечный статус и отправляет webhook.
 
-Отдельный outbox publisher публикует событие в RabbitMQ, удаляет запись outbox после подтверждения брокера и фиксирует удаление. Публикация сама по себе не меняет статус; конечный результат сохраняет consumer после обработки. Полный процесс описан в [требованиях](docs/project.md).
+Отдельный outbox publisher публикует событие в RabbitMQ, удаляет запись outbox после подтверждения брокера и фиксирует удаление. Публикация сама по себе не меняет статус; конечный результат сохраняет consumer после обработки. Полный процесс описан в [архитектуре](docs/architecture.md).
 
 ## Быстрый запуск
 
-Нужны Python 3.10+, `uv`, PowerShell и доступная PostgreSQL. Из корня проекта:
+Для запуска нужны Docker Desktop с Compose, GNU Make и PowerShell. Из корня проекта:
 
 ```powershell
 Copy-Item .env.example .env
@@ -17,15 +17,12 @@ Copy-Item .env.example .env
 Задайте в `.env` рабочие `DB_PASSWORD`, `API_KEY` и `RABBITMQ_PASSWORD`, затем выполните:
 
 ```powershell
-uv sync --python 3.10 --locked
-docker compose up -d db rabbitmq --wait
-uv run --locked alembic upgrade head
-uv run --locked uvicorn src.api.main:app --reload
+make up
 ```
 
-В отдельных окнах запустите consumer: `uv run --locked faststream run src.consumer.app:app`, затем publisher: `uv run --locked python -m src.publisher.main`. Consumer объявляет exchange и очереди; publisher использует готовую топологию. В Compose эти роли запускаются как отдельные сервисы, причём publisher ожидает готовности consumer.
+Команда поднимает PostgreSQL и RabbitMQ, собирает образы, применяет миграции и запускает API, consumer и publisher. Publisher ожидает готовности consumer. Для остановки без удаления данных используйте `make down`. Локальный запуск через `uv` описан в [руководстве для разработчика](docs/getting-started.md).
 
-Для создания платежа в другом окне PowerShell:
+Для создания платежа в другом окне PowerShell (замените `merchant.example` на доступный webhook URL):
 
 ```powershell
 $apiKey = (Get-Content .env | Where-Object { $_ -like 'API_KEY=*' } | Select-Object -First 1) -replace '^API_KEY=', ''
@@ -51,11 +48,14 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/payments -Heade
 | --- | --- |
 | [Запуск и разработка](docs/getting-started.md) | Окружение, Compose, миграции и тесты. |
 | [REST API](docs/api.md) | Запросы, ответы и ошибки платежей. |
-| [Архитектура](docs/architecture.md) | Слои, транзакции и целевые интеграции. |
+| [Архитектура](docs/architecture.md) | Слои, транзакции и доставка событий. |
 | [Переменные окружения](docs/environment-variables.md) | Настройки API, БД, RabbitMQ и логирования. |
-| [Требования](docs/project.md) | Полный целевой сценарий и критерии. |
 
-Диаграммы: [последовательность](docs/architecture/diagrams/payment-processing-sequence.puml), [consumer](docs/architecture/diagrams/payment-consumer-activity.puml), [контейнеры](docs/architecture/diagrams/payment-service-container.puml).
+## Диаграммы
+
+- [Последовательность обработки платежа](docs/architecture/diagrams/payment-processing-sequence.puml)
+- [Действия consumer и webhook](docs/architecture/diagrams/payment-consumer-activity.puml)
+- [Контейнеры сервиса](docs/architecture/diagrams/payment-service-container.puml)
 
 ## Лицензия
 

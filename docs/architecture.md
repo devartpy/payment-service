@@ -4,9 +4,15 @@
 
 Репозиторий содержит один предметный сервис с модульной структурой DDD: домен, сценарии, инфраструктура и HTTP API. В `src/modules/payments/` реализованы доменные и ORM-модели, репозитории, сценарии создания, чтения, публикации и обработки, маршруты POST/GET, RabbitMQ publisher и consumer, webhook. В `alembic/versions/` есть миграция платежных таблиц.
 
-Требования к полному процессу находятся в [задании](project.md), а [диаграмма последовательности](architecture/diagrams/payment-processing-sequence.puml) — в каталоге диаграмм. HTTP-сценарий записывает платёж и outbox; отдельный publisher доставляет событие, consumer его обрабатывает.
+HTTP-сценарий записывает платёж и outbox; отдельный publisher доставляет событие, consumer его обрабатывает.
 
 Такой выбор позволяет расширять один сервис несколькими модулями, сохраняя явные зависимости. Модуль внутри `src/modules/` сам по себе не является отдельным микросервисом: все модули этого репозитория запускаются и развёртываются вместе.
+
+## Диаграммы
+
+- [Последовательность обработки платежа](architecture/diagrams/payment-processing-sequence.puml) — HTTP, outbox, RabbitMQ, consumer и webhook.
+- [Действия consumer](architecture/diagrams/payment-consumer-activity.puml) — обработка платежа, повторы webhook и DLQ.
+- [Контейнеры сервиса](architecture/diagrams/payment-service-container.puml) — роли и внешние связи.
 
 ## Структура проекта
 
@@ -96,7 +102,7 @@ setup_logger(service_name="api")
 app = TraceIdMiddleware(create_app())
 ```
 
-Запуск из корня проекта после установки зависимостей: `uv run --locked uvicorn src.api.main:app --reload`. Внешняя обёртка `TraceIdMiddleware` охватывает также ответы 500, которые создаёт FastAPI. `app.py` не настраивает логирование, поэтому `create_app()` можно вызывать отдельно при проверке HTTP-настроек. Во время lifespan приложение создаёт SQLAlchemy engine и фабрику сессий, а при завершении закрывает engine. Миграции выполняются отдельной командой до платёжных запросов.
+Основной запуск всего стенда из корня проекта — `make up`. Для локальной разработки API можно запустить через `uv run --locked uvicorn src.api.main:app --reload` после подготовки БД и миграций. Внешняя обёртка `TraceIdMiddleware` охватывает также ответы 500, которые создаёт FastAPI. `app.py` не настраивает логирование, поэтому `create_app()` можно вызывать отдельно при проверке HTTP-настроек. Во время lifespan приложение создаёт SQLAlchemy engine и фабрику сессий, а при завершении закрывает engine.
 
 ## Конфигурация
 
@@ -140,17 +146,25 @@ JSON включён по умолчанию (`APP_JSON_LOGS=true`); для чи�
 
 ## Данные и интеграции
 
+### Миграции
+
 Каждый развёртываемый сервис владеет своими данными. Пока модули работают в одной базе сервиса, у неё один набор миграций Alembic. Все ORM-модели наследуют `Base` или `BaseModel` из `src/common/infrastructure/base.py`. Функция `load_models()` находит и импортирует `src/modules/<имя>/infrastructure/db/models.py` для каждого модуля; `alembic/env.py` вызывает её до чтения `Base.metadata`. Если в модуле есть каталог `db/`, но нет `models.py`, загрузка завершается ошибкой. Если зарегистрированных таблиц пока нет, autogenerate также завершается ошибкой вместо генерации удаления таблиц.
 
-Alembic использует переменные `DB_*` из `.env` или окружения процесса и создаёт отдельный движок на время миграции. Исходная ревизия таблиц `payments` и `outbox_events` содержит enum статусов `PENDING`, `SUCCEEDED`, `FAILED`; её применяют на новой БД отдельно от запуска API. Поскольку реальных платежей нет и прежние контейнеры удалены, перенос данных из старого enum не требуется. Для последующих изменений моделей создавайте новые ревизии из корня проекта после запуска PostgreSQL:
+Alembic использует переменные `DB_*` из `.env` или окружения процесса и создаёт отдельный движок на время миграции. Исходная ревизия таблиц `payments` и `outbox_events` содержит enum статусов `PENDING`, `SUCCEEDED`, `FAILED`; её применяют отдельно от запуска API. Для последующих изменений моделей создавайте новые ревизии из корня проекта после запуска PostgreSQL:
 
 ```powershell
-uv run --locked alembic revision --autogenerate -m "create_tables"
+uv run --locked alembic revision --autogenerate -m "update_payment_tables"
 ```
 
 Команда требует работающей базы для сравнения схем. `alembic.ini` запускает `ruff check --fix`, затем `ruff format` для нового файла ревизии; поэтому Alembic запускают из окружения с установленной группой `dev`. Автоформатирование не проверяет смысл изменений: прочитайте `upgrade()` и `downgrade()`, особенно операции удаления таблиц или колонок. После проверки примените ревизию командой `uv run --locked alembic upgrade head`. Миграции выполняются как отдельный шаг развёртывания, а не каждой репликой API при старте.
 
-FastStream с CLI и RabbitMQ, а также HTTPX входят в основные зависимости `pyproject.toml`. Общий транспортный клиент находится в `src/common/infrastructure/broker.py`; `src/consumer/app.py` собирает runtime и импортирует подписчиков из платёжного модуля. Consumer запускается командой `uv run --locked faststream run src.consumer.app:app` или отдельным сервисом Compose. Декораторы двух подписчиков объявляют durable direct exchange `payments`, очередь `payments.new`, DLX `payments.dlx` и очередь `payments.dead_letter` при запуске брокера. `payments.new` привязана к DLX через `x-dead-letter-exchange`. FastStream разбирает JSON в `payload: dict`, подтверждает сообщение при успешном завершении обработчика и применяет `NackMessage`/`RejectMessage` для других веток; prefetch равен 1. Redis и Kafka остаются необязательными зависимостями.
+### RabbitMQ consumer
+
+FastStream с CLI и RabbitMQ, а также HTTPX входят в основные зависимости `pyproject.toml`. Общий транспортный клиент находится в `src/common/infrastructure/broker.py`; `src/consumer/app.py` собирает runtime и импортирует подписчиков из платёжного модуля. Consumer запускается командой `uv run --locked faststream run src.consumer.app:app` или отдельным сервисом Compose.
+
+Декораторы двух подписчиков объявляют durable direct exchange `payments`, очередь `payments.new`, DLX `payments.dlx` и очередь `payments.dead_letter` при запуске брокера. `payments.new` привязана к DLX через `x-dead-letter-exchange`. FastStream разбирает JSON в `payload: dict`, подтверждает сообщение при успешном завершении обработчика и применяет `NackMessage`/`RejectMessage` для других веток; prefetch равен 1. Redis и Kafka остаются необязательными зависимостями.
+
+### Outbox publisher
 
 Цикл начинается с атомарного сохранения `Payment(PENDING)` и OutboxEvent. Один publisher выбирает все события обычным `SELECT ... ORDER BY created_at` и в том же UoW последовательно публикует payload в exchange `payments` с routing key `payments.new`. Канал включает publisher confirms и ошибку при возврате обязательного сообщения; publish требует `mandatory=True`, `persist=True` и положительный Ack. После каждого подтверждения publisher удаляет только это событие и выполняет отдельный `commit` в общей сессии прохода. При ошибке выполняет `rollback` перед следующим событием. Если публикация или фиксация не удалась, outbox остаётся для нового опроса, а уже доставленное событие может повториться. Новые записи API попадут в следующий опрос. Статус Payment при публикации не меняется. Второй экземпляр publisher не поддерживается: чтение без блокировки предполагает один процесс.
 
@@ -159,6 +173,8 @@ Consumer объявляет exchange и очереди. Publisher не созд�
 Ожидание подтверждения RabbitMQ ограничено 10 секундами. При таймауте событие остаётся в outbox для следующего опроса; если сообщение всё же было принято брокером, возможна повторная доставка.
 
 Если у событий одинаковый `created_at`, их взаимный порядок не гарантируется; для доставки это не влияет на подтверждение и удаление каждого события.
+
+### Обработка платежа и webhook
 
 Эмулятор выбирает случайную задержку 2–5 секунд и исход с вероятностями 90% `SUCCEEDED` / 10% `FAILED` для каждого вызова. При `PENDING` consumer условно сохраняет конечный статус и `processed_at` UTC. Повторная доставка сообщения после сохранения конечного статуса не вызывает шлюз снова.
 
@@ -185,6 +201,6 @@ Webhook отправляет JSON `payment_id`, `idempotency_key`, `status` и `
 
 ## See Also
 
-- [Требования](project.md) — целевое поведение платежного сервиса.
+- [Запуск и разработка](getting-started.md) — подготовка БД и запуск всех процессов.
 - [REST API](api.md) — реализованные маршруты и ошибки.
 - [Переменные окружения](environment-variables.md) — настройки API, PostgreSQL и логов.
