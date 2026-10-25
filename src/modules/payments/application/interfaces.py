@@ -41,6 +41,9 @@ class OutboxRepository(Protocol):
     async def get_by_id(self, event_id: uuid.UUID) -> OutboxEvent | None:
         """Вернуть событие или ``None``, если ID не найден."""
 
+    async def list_pending(self) -> list[OutboxEvent]:
+        """Вернуть все события по времени создания."""
+
     async def delete(self, event_id: uuid.UUID) -> bool:
         """Удалить событие; ``False`` означает отсутствие записи."""
 
@@ -71,3 +74,10 @@ class WebhookNotifier(Protocol):
 
     async def notify(self, payment: Payment) -> bool:
         """True только после HTTP 200; False означает отказ после разрешённых попыток."""
+
+
+class OutboxPublisher(Protocol):
+    """Подтверждаемая публикация события в существующую топологию."""
+
+    async def publish(self, event: OutboxEvent) -> None:
+        """Завершиться только после положительного confirm и успешной маршрутизации."""

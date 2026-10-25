@@ -4,7 +4,7 @@ title Асинхронная обработка платежа
 actor "Клиент" as Client
 boundary "Payment API" as API
 database "PostgreSQL\n(payments, outbox)" as DB
-participant "Публикатор outbox\n(логическая роль)" as Publisher
+participant "Outbox publisher\n(один процесс)" as Publisher
 queue "RabbitMQ\npayments.new" as Queue
 participant "Payment consumer" as Consumer
 participant "Платежный шлюз\n(эмуляция)" as Gateway
@@ -29,19 +29,19 @@ else Оба заголовка действительны
 end
 
 opt Создан новый платеж
-  loop Пока OutboxEvent существует
-    Publisher -> DB: Выбрать OutboxEvent\nFOR UPDATE SKIP LOCKED
-    DB --> Publisher: Событие о новом платеже
-    Publisher ->> Queue: Опубликовать в payments.new
+  Publisher -> DB: SELECT все OutboxEvent\nORDER BY created_at
+  DB --> Publisher: Упорядоченный список в одном UoW
+  loop По одному событию из списка
+    Publisher ->> Queue: Опубликовать persistent в payments.new\nmandatory=true
     alt Сообщение маршрутизировано и подтверждено RabbitMQ
-      Queue --> Publisher: Publisher confirm
-      Publisher -> DB: Удалить OutboxEvent и зафиксировать транзакцию
+      Queue --> Publisher: Положительный publisher confirm (Ack)
+      Publisher -> DB: Удалить этот OutboxEvent и сделать commit\nв той же сессии
       note right of Publisher
-        Если транзакция БД не завершилась,
-        OutboxEvent остаётся для новой публикации.
+        Сбой commit оставляет событие для повтора.
+        Новые INSERT попадут в следующий опрос.
       end note
-    else Нет подтверждения публикации
-      Publisher -> DB: Оставить OutboxEvent для повтора
+    else Нет Ack или сообщение не маршрутизировано
+      Publisher -> DB: Rollback; оставить событие для повтора
     end
   end
 

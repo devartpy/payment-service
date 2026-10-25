@@ -8,7 +8,7 @@
 Copy-Item .env.example .env
 ```
 
-`DB_USER` и `DB_PASSWORD` обязательны при создании `DatabaseConfig`; `API_KEY` обязателен при создании `FastAPIConfig`. API и consumer создают собственные движки и фабрики сессий. Команды Alembic тоже читают `DB_*`. Замените `DB_PASSWORD=change-me`, `RABBITMQ_PASSWORD=change-me` и `API_KEY=replace-with-a-secret` в примере. Не храните рабочие секреты в Git.
+`DB_USER` и `DB_PASSWORD` обязательны при создании `DatabaseConfig`; `API_KEY` обязателен при создании `FastAPIConfig`. API, consumer и publisher создают собственные движки и фабрики сессий. Команды Alembic тоже читают `DB_*`. Замените `DB_PASSWORD=change-me`, `RABBITMQ_PASSWORD=change-me` и `API_KEY=replace-with-a-secret` в примере. Не храните рабочие секреты в Git.
 
 ## Приложение и логирование
 
@@ -17,7 +17,7 @@ Copy-Item .env.example .env
 | `APP_LOG_LEVEL` | `INFO` | Уровень Python logging: `DEBUG`, `INFO`, `WARNING`, `ERROR` или `CRITICAL`. |
 | `APP_JSON_LOGS` | `true` | `true` — JSON по строке на событие; `false` — читаемый формат для локальной разработки. |
 
-Имя для поля `service` передаётся при настройке логирования, например `setup_logger(service_name="api")` или `setup_logger(service_name="consumer")`. Это имя относится к процессу, а не к переменной окружения.
+Имя для поля `service` передаётся при настройке логирования, например `setup_logger(service_name="api")`, `setup_logger(service_name="consumer")` или `setup_logger(service_name="publisher")`. Это имя относится к процессу, а не к переменной окружения. Publisher пишет INFO после подтверждения RabbitMQ и фиксации удаления, WARNING/ERROR при сбоях, DEBUG при опросе outbox; payload, ключи и секреты в лог не передаются.
 
 ## PostgreSQL
 
@@ -41,11 +41,11 @@ Copy-Item .env.example .env
 | `RABBITMQ_PASSWORD` | `guest` | Пароль AMQP. Задайте собственное значение в `.env`. |
 | `RABBITMQ_VHOST` | `/` | Виртуальный хост; значение кодируется при построении AMQP URL. |
 
-`RabbitMQConfig` собирает URL и кодирует логин, пароль и vhost. Consumer создаёт exchange и очереди при запуске. Compose открывает AMQP-порт на `127.0.0.1` и интерфейс управления на `127.0.0.1:15672`. Для уже созданного тома RabbitMQ смена логина/пароля через переменные Compose не перенастраивает существующего пользователя; настройте его в брокере либо используйте новый том в новом стенде.
+`RabbitMQConfig` собирает URL и кодирует логин, пароль и vhost. Consumer создаёт exchange и очереди при запуске; publisher использует готовую топологию. Compose открывает AMQP-порт на `127.0.0.1` и интерфейс управления на `127.0.0.1:15672`. Для уже созданного тома RabbitMQ смена логина/пароля через переменные Compose не перенастраивает существующего пользователя; настройте его в брокере либо используйте новый том в новом стенде.
 
 Имена exchange и очередей заданы константами в `src/common/configs/rabbitmq_config.py` и через `.env` не настраиваются. Routing key совпадают с именами соответствующих очередей.
 
-В `docker-compose.yaml` переменная `DB_PORT` задаёт опубликованный порт PostgreSQL на хосте. Процессы API и consumer внутри сети Compose используют `db:5432`. Для локальных команд Alembic и тестов укажите в `.env` порт, опубликованный на хосте. Подробности запуска — в [руководстве](getting-started.md).
+В `docker-compose.yaml` переменная `DB_PORT` задаёт опубликованный порт PostgreSQL на хосте. Процессы API, consumer и publisher внутри сети Compose используют `db:5432`. Для локальных команд Alembic и тестов укажите в `.env` порт, опубликованный на хосте. Подробности запуска — в [руководстве](getting-started.md).
 
 ## FastAPI
 

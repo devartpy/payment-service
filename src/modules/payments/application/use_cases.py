@@ -9,7 +9,7 @@ import structlog
 from src.common.exceptions import ApplicationException
 from src.modules.payments.application.dtos import CreatePaymentCommand
 from src.modules.payments.application.exceptions import IdempotencyConflictError, PaymentNotFoundError
-from src.modules.payments.application.interfaces import PaymentGateway, PaymentUnitOfWork
+from src.modules.payments.application.interfaces import OutboxPublisher, PaymentGateway, PaymentUnitOfWork
 from src.modules.payments.domain.exceptions import PaymentDomainException
 from src.modules.payments.domain.models import OutboxEvent, Payment
 from src.modules.payments.domain.value_objects import OutboxEventType, PaymentStatus
@@ -116,3 +116,36 @@ class ProcessPayment:
 
         logger.debug("payment_processing_completed", payment_id=str(payment_id), status=payment.status.value)
         return payment
+
+
+class RelayOutbox:
+    """Одна итерация публикации; каждый удалённый event фиксируется отдельно."""
+
+    def __init__(self, uow_factory: Callable[[], PaymentUnitOfWork], publisher: OutboxPublisher) -> None:
+        self._uow_factory = uow_factory
+        self._publisher = publisher
+
+    async def execute(self) -> int:
+        logger.debug("outbox_relay_started")
+        async with self._uow_factory() as uow:
+            events = await uow.outbox.list_pending()
+            if not events:
+                logger.debug("outbox_relay_empty")
+                return 0
+
+            published = 0
+            for event in events:
+                try:
+                    await self._publisher.publish(event)
+                    deleted = await uow.outbox.delete(event.id)
+                    if not deleted:
+                        raise RuntimeError("Confirmed outbox event was not found for deletion")
+                    await uow.commit()
+                    published += 1
+                    logger.info("outbox_event_committed", event_id=str(event.id))
+                except Exception as error:
+                    logger.error("outbox_relay_event_failed", event_id=str(event.id), error_type=type(error).__name__)
+                    await uow.rollback()
+
+        logger.debug("outbox_relay_completed", selected=len(events), committed=published)
+        return published

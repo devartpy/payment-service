@@ -116,6 +116,19 @@ class SQLAlchemyOutboxRepository(OutboxRepository):
         logger.debug("outbox_get_completed", event_id=str(event_id), found=result is not None)
         return result
 
+    async def list_pending(self) -> list[OutboxEvent]:
+        logger.debug("outbox_list_started")
+        try:
+            result = await self._session.execute(
+                select(orm.OutboxEvent).order_by(orm.OutboxEvent.created_at)
+            )
+            events = [outbox_to_domain(record) for record in result.scalars()]
+        except Exception as error:
+            logger.error("outbox_list_failed", error_type=type(error).__name__)
+            raise
+        logger.debug("outbox_list_completed", count=len(events))
+        return events
+
     async def delete(self, event_id: uuid.UUID) -> bool:
         logger.debug("outbox_delete_started", event_id=str(event_id))
         try:

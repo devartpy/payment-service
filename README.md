@@ -4,7 +4,7 @@
 
 Сервис принимает платежи по HTTP и позволяет читать их состояние. При создании он сохраняет платёж со статусом `pending` и событие outbox в одной транзакции. Отдельный consumer обрабатывает опубликованное событие, сохраняет конечный статус и отправляет webhook.
 
-Outbox publisher ещё не реализован, поэтому созданный через API платёж остаётся `pending`. Публикация события сама по себе не меняет статус; конечный результат сохраняет consumer после обработки. Полный целевой процесс описан в [требованиях](docs/project.md).
+Отдельный outbox publisher публикует событие в RabbitMQ, удаляет запись outbox после подтверждения брокера и фиксирует удаление. Публикация сама по себе не меняет статус; конечный результат сохраняет consumer после обработки. Полный процесс описан в [требованиях](docs/project.md).
 
 ## Быстрый запуск
 
@@ -23,7 +23,7 @@ uv run --locked alembic upgrade head
 uv run --locked uvicorn src.api.main:app --reload
 ```
 
-В отдельном окне запустите consumer: `uv run --locked faststream run src.consumer.app:app`. В Docker Compose он запускается отдельным сервисом `consumer`. При старте он объявляет `payments.new`, `payments.dead_letter` и exchange. Без outbox publisher API пока не запускает обработку созданного платежа автоматически.
+В отдельных окнах запустите consumer: `uv run --locked faststream run src.consumer.app:app`, затем publisher: `uv run --locked python -m src.publisher.main`. Consumer объявляет exchange и очереди; publisher использует готовую топологию. В Compose эти роли запускаются как отдельные сервисы, причём publisher ожидает готовности consumer.
 
 Для создания платежа в другом окне PowerShell:
 
@@ -42,6 +42,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/payments -Heade
 - Обязательный `Idempotency-Key` для POST и отказ при повторном использовании ключа.
 - Общий формат ошибок и атомарный `commit` платежа с outbox через SQLAlchemy Unit of Work.
 - FastStream consumer: эмуляция шлюза со случайным исходом 90/10, конечный статус, webhook до трёх попыток; второй subscriber логирует и подтверждает сообщения из DLQ.
+- Outbox relay: публикация с RabbitMQ confirm и проверкой маршрута, затем отдельный `commit` удаления для каждого события. После сбоя commit публикация может повториться.
 - Интеграционные и HTTP-тесты на PostgreSQL с изоляцией во временных схемах; проверки consumer на одном RabbitMQ с отдельными очередями тестов.
 
 ## Документация

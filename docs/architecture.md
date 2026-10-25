@@ -2,9 +2,9 @@
 
 # Архитектура сервиса
 
-Репозиторий содержит один предметный сервис с модульной структурой DDD: домен, сценарии, инфраструктура и HTTP API. В `src/modules/payments/` реализованы доменные и ORM-модели, репозитории, сценарии создания, чтения и обработки, маршруты POST/GET, RabbitMQ consumer и webhook. В `alembic/versions/` есть миграция платежных таблиц.
+Репозиторий содержит один предметный сервис с модульной структурой DDD: домен, сценарии, инфраструктура и HTTP API. В `src/modules/payments/` реализованы доменные и ORM-модели, репозитории, сценарии создания, чтения, публикации и обработки, маршруты POST/GET, RabbitMQ publisher и consumer, webhook. В `alembic/versions/` есть миграция платежных таблиц.
 
-Требования к полному процессу находятся в [задании](project.md), а его целевая [диаграмма последовательности](architecture/diagrams/payment-processing-sequence.puml) — в каталоге диаграмм. HTTP-сценарий записывает платёж и outbox; consumer обрабатывает уже опубликованное событие. Отдельного outbox publisher пока нет.
+Требования к полному процессу находятся в [задании](project.md), а [диаграмма последовательности](architecture/diagrams/payment-processing-sequence.puml) — в каталоге диаграмм. HTTP-сценарий записывает платёж и outbox; отдельный publisher доставляет событие, consumer его обрабатывает.
 
 Такой выбор позволяет расширять один сервис несколькими модулями, сохраняя явные зависимости. Модуль внутри `src/modules/` сам по себе не является отдельным микросервисом: все модули этого репозитория запускаются и развёртываются вместе.
 
@@ -24,7 +24,7 @@ src/
 │   ├── infrastructure/
 │   │   ├── base.py        # Base, BaseModel и общие метаданные ORM
 │   │   ├── database.py    # Фабрики движка и сессий
-│   │   ├── broker.py      # Общий RabbitBroker
+│   │   ├── broker.py      # Клиенты RabbitMQ для consumer и publisher
 │   │   ├── sqlalchemy_uow.py # Общий жизненный цикл SQLAlchemy UoW
 │   │   └── model_registry.py # Поиск моделей бизнес-модулей
 │   ├── unit_of_work.py    # Общий контракт транзакции без SQLAlchemy
@@ -32,7 +32,10 @@ src/
 │   └── exceptions.py      # Общая ошибка приложения
 ├── consumer/
 │   ├── app.py             # Runtime FastStream и закрытие SQLAlchemy engine
-│   └── main.py            # Локальный запуск через python -m
+│   ├── main.py            # Локальный запуск через python -m
+│   └── healthcheck.py     # Пассивная проверка exchange и очереди
+├── publisher/
+│   └── main.py            # Отдельный цикл опроса outbox
 └── modules/
     └── payments/          # Платёжный модуль
         ├── domain/
@@ -52,7 +55,8 @@ src/
         │   ├── unit_of_work.py
         │   ├── gateway.py        # Эмулятор шлюза
         │   ├── webhook.py        # HTTP webhook и retry
-        │   └── consumer.py       # FastStream и обработка ack/nack/reject
+        │   ├── consumer.py       # FastStream и обработка ack/nack/reject
+        │   └── publisher.py      # Подтверждаемая публикация RabbitMQ
         └── api/v1/
             ├── router.py
             └── schemas.py
@@ -102,7 +106,7 @@ app = TraceIdMiddleware(create_app())
 
 `DatabaseConfig.async_url` возвращает объект SQLAlchemy `URL`. `create_engine()` в `src/common/infrastructure/database.py` передаёт его напрямую: специальные символы в пароле не нужно экранировать вручную. `create_session_factory(engine)` создаёт фабрику сессий. Не записывайте URL с открытым паролем в логи.
 
-API закрывает свой engine при остановке. Модуль платёжного consumer создаёт один engine и одну фабрику сессий на процесс; соединения открываются по требованию, а engine закрывается при остановке FastStream-приложения.
+API закрывает свой engine при остановке. Consumer и publisher создают каждый свой engine и фабрику сессий на процесс, закрывая engine при завершении.
 
 Значение `FA_CORS_ORIGINS` для списка адресов задаётся JSON-массивом, например `FA_CORS_ORIGINS='["http://localhost:3000"]'`.
 
@@ -148,7 +152,13 @@ uv run --locked alembic revision --autogenerate -m "create_tables"
 
 FastStream с CLI и RabbitMQ, а также HTTPX входят в основные зависимости `pyproject.toml`. Общий транспортный клиент находится в `src/common/infrastructure/broker.py`; `src/consumer/app.py` собирает runtime и импортирует подписчиков из платёжного модуля. Consumer запускается командой `uv run --locked faststream run src.consumer.app:app` или отдельным сервисом Compose. Декораторы двух подписчиков объявляют durable direct exchange `payments`, очередь `payments.new`, DLX `payments.dlx` и очередь `payments.dead_letter` при запуске брокера. `payments.new` привязана к DLX через `x-dead-letter-exchange`. FastStream разбирает JSON в `payload: dict`, подтверждает сообщение при успешном завершении обработчика и применяет `NackMessage`/`RejectMessage` для других веток; prefetch равен 1. Redis и Kafka остаются необязательными зависимостями.
 
-Целевой цикл начинается с атомарного сохранения `Payment(PENDING)` и OutboxEvent. Наличие записи outbox показывает, что публикация ещё не завершена. Будущий publisher должен выбрать событие через `SELECT ... FOR UPDATE SKIP LOCKED`, опубликовать `{"payment_id":"<UUID>"}` в exchange `payments` с routing key `payments.new`, дождаться подтверждения брокера и успешной маршрутизации, затем удалить OutboxEvent и зафиксировать транзакцию БД. Статус Payment при публикации не меняется; при сбое до фиксации БД outbox остаётся для повторной публикации.
+Цикл начинается с атомарного сохранения `Payment(PENDING)` и OutboxEvent. Один publisher выбирает все события обычным `SELECT ... ORDER BY created_at` и в том же UoW последовательно публикует payload в exchange `payments` с routing key `payments.new`. Канал включает publisher confirms и ошибку при возврате обязательного сообщения; publish требует `mandatory=True`, `persist=True` и положительный Ack. После каждого подтверждения publisher удаляет только это событие и выполняет отдельный `commit` в общей сессии прохода. При ошибке выполняет `rollback` перед следующим событием. Если публикация или фиксация не удалась, outbox остаётся для нового опроса, а уже доставленное событие может повториться. Новые записи API попадут в следующий опрос. Статус Payment при публикации не меняется. Второй экземпляр publisher не поддерживается: чтение без блокировки предполагает один процесс.
+
+Consumer объявляет exchange и очереди. Publisher не создаёт топологию; локально его запускают после consumer. В Compose healthcheck consumer пассивно проверяет основной exchange и очередь, и только после его успеха стартует publisher.
+
+Ожидание подтверждения RabbitMQ ограничено 10 секундами. При таймауте событие остаётся в outbox для следующего опроса; если сообщение всё же было принято брокером, возможна повторная доставка.
+
+Если у событий одинаковый `created_at`, их взаимный порядок не гарантируется; для доставки это не влияет на подтверждение и удаление каждого события.
 
 Эмулятор выбирает случайную задержку 2–5 секунд и исход с вероятностями 90% `SUCCEEDED` / 10% `FAILED` для каждого вызова. При `PENDING` consumer условно сохраняет конечный статус и `processed_at` UTC. Повторная доставка сообщения после сохранения конечного статуса не вызывает шлюз снова.
 
