@@ -2,7 +2,7 @@
 
 # Запуск и разработка
 
-Инструкции выполняются из корня репозитория. POST/GET платежей работают с PostgreSQL; publisher, consumer и RabbitMQ ещё не подключены.
+Инструкции выполняются из корня репозитория. POST/GET платежей работают с PostgreSQL, consumer — с PostgreSQL и RabbitMQ. Outbox publisher ещё не подключён.
 
 ## Требования
 
@@ -10,14 +10,14 @@
 | --- | --- |
 | Python 3.10+ | Локальный запуск; Dockerfile и CI используют Python 3.10. |
 | [uv](https://docs.astral.sh/uv/getting-started/installation/) | Установка зависимостей по `uv.lock`. |
-| Docker Desktop с Compose | Контейнеры API и PostgreSQL. |
+| Docker Desktop с Compose | Контейнеры API, consumer, PostgreSQL и RabbitMQ. |
 | PowerShell | Команды ниже приведены для Windows. |
 
 `uv.lock` уже входит в репозиторий. При изменении зависимостей обновите его командой `uv lock` и сохраняйте вместе с `pyproject.toml`.
 
 ## Локальный запуск API
 
-1. Создайте конфигурацию, замените учебные `DB_PASSWORD=change-me` и `API_KEY=replace-with-a-secret` в `.env`:
+1. Создайте конфигурацию, замените учебные `DB_PASSWORD=change-me`, `RABBITMQ_PASSWORD=change-me` и `API_KEY=replace-with-a-secret` в `.env`:
 
    ```powershell
    Copy-Item .env.example .env
@@ -29,10 +29,10 @@
    uv sync --python 3.10 --locked
    ```
 
-3. Запустите PostgreSQL и примените миграции:
+3. Запустите PostgreSQL и RabbitMQ, примените миграции:
 
    ```powershell
-   docker compose up -d db --wait
+   docker compose up -d db rabbitmq --wait
    uv run --locked alembic upgrade head
    ```
 
@@ -41,6 +41,14 @@
    ```powershell
    uv run --locked uvicorn src.api.main:app --reload
    ```
+
+   Во втором терминале запустите consumer:
+
+   ```powershell
+   uv run --locked faststream run src.consumer.app:app
+   ```
+
+   Подписчики consumer создают durable exchange `payments`, очередь `payments.new`, DLX `payments.dlx` и очередь `payments.dead_letter` при запуске. Первый ожидает событие `{"payment_id":"<UUID>"}`; второй логирует попадание сообщения в DLQ на уровне CRITICAL и подтверждает его. Сообщение после этого удаляется из DLQ. Поскольку outbox publisher ещё не реализован, POST создаёт платёж `new`, но сам не публикует сообщение и не переводит платёж в `pending`. Интеграционные тесты проверяют consumer с подготовленным `pending` платежом и прямой публикацией события.
 
 5. Откройте `http://127.0.0.1:8000/docs` или проверьте доступность схемы:
 
@@ -59,15 +67,15 @@ docker compose up -d --build --wait
 docker compose ps
 ```
 
-Compose поднимает `api` и `db` и ждёт готовности PostgreSQL перед запуском API. Примените миграции отдельной командой с хоста: `uv run --locked alembic upgrade head`. Swagger UI доступен на `http://127.0.0.1:8000/docs`. Для остановки без удаления данных:
+Compose поднимает `api`, `consumer`, `db` и `rabbitmq`. Примените миграции отдельной командой с хоста: `uv run --locked alembic upgrade head`. Swagger UI доступен на `http://127.0.0.1:8000/docs`. Для остановки без удаления данных:
 
 ```powershell
 docker compose down
 ```
 
-В Compose пока нет RabbitMQ, consumer и outbox publisher. API создаёт фабрику асинхронных сессий при старте и использует БД при платёжных запросах; миграции не запускаются автоматически.
+В Compose есть отдельный процесс consumer с командой `faststream run src.consumer.app:app`; outbox publisher пока отсутствует. API создаёт фабрику асинхронных сессий при старте. Consumer использует один SQLAlchemy engine и одну фабрику сессий на весь процесс, а при остановке закрывает engine. Миграции не запускаются автоматически.
 
-Пока используйте `DB_PORT=5432`: текущий Compose не разделяет порт PostgreSQL на хосте и порт подключения внутри контейнера. Причина описана в [переменных окружения](environment-variables.md).
+`DB_PORT` задаёт порт PostgreSQL на хосте; API и consumer внутри Compose подключаются к `db:5432`. Подробности приведены в [переменных окружения](environment-variables.md).
 
 ## Проверки
 
@@ -78,7 +86,7 @@ uv run --locked pytest
 uv build
 ```
 
-CI выполняет эти проверки для pull request и предварительно применяет миграции. Локальные интеграционные и HTTP-тесты используют запущенную PostgreSQL: каждый создаёт собственную временную схему, применяет к ней миграции и удаляет только эту схему. Отдельная тестовая БД или новый контейнер на каждый тест не нужны. На Windows с GNU Make доступны `make lint`, `make test`, `make up`, `make down` и другие цели из `Makefile`.
+CI выполняет эти проверки для pull request и предварительно применяет миграции. Локальные интеграционные и HTTP-тесты используют запущенную PostgreSQL: каждый создаёт собственную временную схему, применяет к ней миграции и удаляет только эту схему. Тесты consumer используют один запущенный RabbitMQ и отдельные очереди/exchange для каждого теста, которые удаляются после него. Отдельная тестовая БД или новый контейнер на каждый тест не нужны. Для полного локального прогона запустите `docker compose up -d db rabbitmq --wait`. На Windows с GNU Make доступны `make lint`, `make test`, `make up`, `make down` и другие цели из `Makefile`.
 
 ## Миграции
 

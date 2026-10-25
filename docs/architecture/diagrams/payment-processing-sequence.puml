@@ -9,7 +9,7 @@ queue "RabbitMQ\npayments.new" as Queue
 participant "Payment consumer" as Consumer
 participant "Платежный шлюз\n(эмуляция)" as Gateway
 participant "Webhook клиента" as Webhook
-queue "RabbitMQ\npayments.dlq" as DLQ
+queue "RabbitMQ\npayments.dead_letter" as DLQ
 
 Client -> API: POST /api/v1/payments\nX-API-Key, Idempotency-Key (обязательные заголовки), данные платежа
 alt API-ключ недействителен
@@ -57,7 +57,7 @@ opt Создан новый платеж
   alt Статус NEW
     Consumer -> Queue: nack(requeue=true)\nбез вызова шлюза
   else Статус PENDING
-    Consumer -> Gateway: Эмулировать платёж (2–5 с)\nс Idempotency-Key
+    Consumer -> Gateway: Эмулировать платёж\n(случайные 2–5 с и исход 90/10)
     alt Успех платежа (90%)
       Gateway --> Consumer: succeeded
       Consumer -> DB: Сохранить SUCCEEDED и дату обработки
@@ -83,6 +83,10 @@ opt Создан новый платеж
     else Сеть, таймаут или 5xx после 3 попыток
       Consumer -> Queue: nack(requeue=false) исходного сообщения
       Queue ->> DLQ: Передать через dead-letter exchange
+    end
+    opt Сообщение попало в DLQ
+      DLQ ->> Consumer: Доставить исходное сообщение второму subscriber
+      Consumer -> DLQ: Лог CRITICAL и ack
     end
   end
 end

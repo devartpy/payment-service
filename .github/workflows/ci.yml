@@ -21,7 +21,23 @@ jobs:
       DB_USER: payment_service
       DB_PASSWORD: test_password
       DB_NAME: payment_service
+      RABBITMQ_HOST: localhost
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: payment_service
+      RABBITMQ_PASSWORD: test_password
     services:
+      rabbitmq:
+        image: rabbitmq:4-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: payment_service
+          RABBITMQ_DEFAULT_PASS: test_password
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
       postgres:
         image: postgres:18.6-alpine
         env:

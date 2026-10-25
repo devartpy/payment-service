@@ -1,8 +1,8 @@
 # payment-service
 
-> Асинхронный платёжный сервис на FastAPI и PostgreSQL с атомарной записью платежа и outbox.
+> Асинхронный платёжный сервис на FastAPI, PostgreSQL и RabbitMQ.
 
-Сервис принимает платежи по HTTP и позволяет читать их состояние. При создании он сохраняет платёж со статусом `new` и событие outbox в одной транзакции. Публикация в RabbitMQ, обработка платежа и webhook пока не реализованы; полный целевой процесс описан в [требованиях](docs/project.md).
+Сервис принимает платежи по HTTP и позволяет читать их состояние. При создании он сохраняет платёж со статусом `new` и событие outbox в одной транзакции. Отдельный consumer обрабатывает опубликованное событие, сохраняет конечный статус и отправляет webhook. Outbox publisher ещё не реализован: созданный через API платёж останется `new`, пока отдельная роль не опубликует событие и не переведёт его в `pending`. Полный целевой процесс описан в [требованиях](docs/project.md).
 
 ## Быстрый запуск
 
@@ -12,14 +12,16 @@
 Copy-Item .env.example .env
 ```
 
-Задайте в `.env` рабочие `DB_PASSWORD` и `API_KEY`, затем выполните:
+Задайте в `.env` рабочие `DB_PASSWORD`, `API_KEY` и `RABBITMQ_PASSWORD`, затем выполните:
 
 ```powershell
 uv sync --python 3.10 --locked
-docker compose up -d db --wait
+docker compose up -d db rabbitmq --wait
 uv run --locked alembic upgrade head
 uv run --locked uvicorn src.api.main:app --reload
 ```
+
+В отдельном окне запустите consumer: `uv run --locked faststream run src.consumer.app:app`. В Docker Compose он запускается отдельным сервисом `consumer`. При старте он объявляет `payments.new`, `payments.dead_letter` и exchange. Без outbox publisher API пока не запускает обработку созданного платежа автоматически.
 
 Для создания платежа в другом окне PowerShell:
 
@@ -37,7 +39,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/payments -Heade
 - `POST /api/v1/payments` и `GET /api/v1/payments/{payment_id}` с проверкой `X-API-Key`.
 - Обязательный `Idempotency-Key` для POST и отказ при повторном использовании ключа.
 - Общий формат ошибок и атомарный `commit` платежа с outbox через SQLAlchemy Unit of Work.
-- Интеграционные и HTTP-тесты на PostgreSQL с изоляцией во временных схемах.
+- FastStream consumer: эмуляция шлюза со случайным исходом 90/10, конечный статус, webhook до трёх попыток; второй subscriber логирует и подтверждает сообщения из DLQ.
+- Интеграционные и HTTP-тесты на PostgreSQL с изоляцией во временных схемах; проверки consumer на одном RabbitMQ с отдельными очередями тестов.
 
 ## Документация
 
@@ -46,7 +49,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/payments -Heade
 | [Запуск и разработка](docs/getting-started.md) | Окружение, Compose, миграции и тесты. |
 | [REST API](docs/api.md) | Запросы, ответы и ошибки платежей. |
 | [Архитектура](docs/architecture.md) | Слои, транзакции и целевые интеграции. |
-| [Переменные окружения](docs/environment-variables.md) | Настройки API, БД и логирования. |
+| [Переменные окружения](docs/environment-variables.md) | Настройки API, БД, RabbitMQ и логирования. |
 | [Требования](docs/project.md) | Полный целевой сценарий и критерии. |
 
 Диаграммы: [последовательность](docs/architecture/diagrams/payment-processing-sequence.puml), [consumer](docs/architecture/diagrams/payment-consumer-activity.puml), [контейнеры](docs/architecture/diagrams/payment-service-container.puml).

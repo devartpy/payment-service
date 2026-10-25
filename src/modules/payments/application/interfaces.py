@@ -57,3 +57,17 @@ class PaymentUnitOfWork(AbstractUnitOfWork):
     @abstractmethod
     def outbox(self) -> OutboxRepository:
         """Репозиторий событий той же транзакции."""
+
+
+class PaymentGateway(Protocol):
+    """Адаптер шлюза; реальная реализация передаёт payment.idempotency_key провайдеру."""
+
+    async def process(self, payment: Payment) -> PaymentStatus:
+        """Вернуть конечный статус; идемпотентность реального вызова обеспечивает провайдер."""
+
+
+class WebhookNotifier(Protocol):
+    """Отправка уведомления о конечном статусе."""
+
+    async def notify(self, payment: Payment) -> bool:
+        """True только после HTTP 200; False означает отказ после разрешённых попыток."""
