@@ -23,7 +23,7 @@ class Payment(BaseModel):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     status: Mapped[PaymentStatus] = mapped_column(
         SQLEnum(PaymentStatus, native_enum=True, name="payment_status_enum"),
-        default=PaymentStatus.NEW,
+        default=PaymentStatus.PENDING,
         index=True,
         nullable=False,
     )

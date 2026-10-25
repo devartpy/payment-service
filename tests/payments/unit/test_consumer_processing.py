@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from faststream.exceptions import NackMessage, RejectMessage
+from faststream.exceptions import RejectMessage
 from structlog.testing import capture_logs
 
 from src.modules.payments.domain.models import Payment
@@ -124,21 +124,6 @@ async def test_gateway_uses_random_delay_and_90_10_boundary(monkeypatch: pytest.
     assert first is PaymentStatus.FAILED
     assert second is PaymentStatus.SUCCEEDED
     assert delays == [3.5, 3.5]
-
-
-@pytest.mark.asyncio
-async def test_new_message_is_requeued_without_gateway_or_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
-    payment = make_payment(PaymentStatus.NEW)
-    transaction = FakeUow(payment)
-    gateway = FakeGateway()
-    notifier = FakeNotifier()
-    configure_handler(monkeypatch, transaction, gateway, notifier)
-    with pytest.raises(NackMessage):
-        await handle_payment({"payment_id": str(payment.id)})
-
-    assert gateway.calls == 0
-    assert notifier.calls == 0
-    assert transaction.commits == 0
 
 
 @pytest.mark.asyncio

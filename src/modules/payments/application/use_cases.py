@@ -85,7 +85,7 @@ class ProcessPayment:
         self._uow_factory = uow_factory
         self._gateway = gateway
 
-    async def execute(self, payment_id: UUID) -> Payment | None:
+    async def execute(self, payment_id: UUID) -> Payment:
         logger.debug("payment_processing_started", payment_id=str(payment_id))
         async with self._uow_factory() as uow:
             payment = await uow.payments.get_by_id(payment_id)
@@ -93,10 +93,6 @@ class ProcessPayment:
             if payment is None:
                 logger.warning("payment_processing_not_found", payment_id=str(payment_id))
                 raise PaymentNotFoundError()
-            if payment.status is PaymentStatus.NEW:
-                logger.warning("payment_processing_waiting_for_publisher", payment_id=str(payment_id))
-                return None
-
             if payment.status is PaymentStatus.PENDING:
                 logger.debug("payment_gateway_call_started", payment_id=str(payment_id))
                 outcome = await self._gateway.process(payment)

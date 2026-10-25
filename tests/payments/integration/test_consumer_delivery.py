@@ -139,7 +139,7 @@ def configure_test_handler(
 
 
 @pytest.mark.asyncio
-async def test_new_message_waits_then_duplicate_skips_gateway(
+async def test_pending_message_completes_then_duplicate_skips_gateway(
     session_factory: async_sessionmaker[AsyncSession],
     rabbit_case: RabbitCase,
     monkeypatch: pytest.MonkeyPatch,
@@ -160,14 +160,6 @@ async def test_new_message_waits_then_duplicate_skips_gateway(
         exchange=rabbit_case.exchange,
         persist=True,
     )
-    await asyncio.sleep(0.1)
-    assert gateway.calls == 0
-    assert notifier.calls == 0
-
-    async with SQLAlchemyPaymentUnitOfWork(session_factory) as uow:
-        assert await uow.payments.update_status(payment.id, PaymentStatus.NEW, PaymentStatus.PENDING)
-        await uow.commit()
-
     await wait_for(lambda: notifier.calls == 1)
     async with SQLAlchemyPaymentUnitOfWork(session_factory) as uow:
         stored = await uow.payments.get_by_id(payment.id)
@@ -195,7 +187,6 @@ async def test_webhook_failure_dead_letters_original_message(
     expected_attempts: int,
 ) -> None:
     payment = make_payment()
-    payment.status = PaymentStatus.PENDING
     async with SQLAlchemyPaymentUnitOfWork(session_factory) as uow:
         await uow.payments.add(payment)
         await uow.commit()

@@ -72,9 +72,6 @@ async def handle_payment(payload: dict[str, object]) -> None:
         # При постоянном сбое оно будет обрабатываться снова, пока причина не устранена.
         raise NackMessage(requeue=True) from error
 
-    if payment is None:
-        raise NackMessage(requeue=True)
-
     async with httpx.AsyncClient() as client:
         try:
             delivered = await HTTPWebhookNotifier(client).notify(payment)

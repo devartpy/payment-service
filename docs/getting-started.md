@@ -48,7 +48,7 @@
    uv run --locked faststream run src.consumer.app:app
    ```
 
-   Подписчики consumer создают durable exchange `payments`, очередь `payments.new`, DLX `payments.dlx` и очередь `payments.dead_letter` при запуске. Первый ожидает событие `{"payment_id":"<UUID>"}`; второй логирует попадание сообщения в DLQ на уровне CRITICAL и подтверждает его. Сообщение после этого удаляется из DLQ. Поскольку outbox publisher ещё не реализован, POST создаёт платёж `new`, но сам не публикует сообщение и не переводит платёж в `pending`. Интеграционные тесты проверяют consumer с подготовленным `pending` платежом и прямой публикацией события.
+   Подписчики consumer создают durable exchange `payments`, очередь `payments.new`, DLX `payments.dlx` и очередь `payments.dead_letter` при запуске. Первый ожидает событие `{"payment_id":"<UUID>"}`; второй логирует попадание сообщения в DLQ на уровне CRITICAL и подтверждает его. Сообщение после этого удаляется из DLQ. Поскольку outbox publisher ещё не реализован, POST создаёт платёж `pending` и запись outbox, но сам не публикует сообщение. Интеграционные тесты проверяют consumer с подготовленным `pending` платежом и прямой публикацией события.
 
 5. Откройте `http://127.0.0.1:8000/docs` или проверьте доступность схемы:
 
@@ -90,7 +90,7 @@ CI выполняет эти проверки для pull request и предв�
 
 ## Миграции
 
-`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. Модели `payments` и `outbox_events` и ревизия для них находятся в `alembic/versions/`. На текущем стенде разработки миграции уже применены; для новой БД после запуска PostgreSQL просмотрите `upgrade()` и `downgrade()` ревизии и выполните:
+`alembic/env.py` импортирует ORM-модели из `src/modules/*/infrastructure/db/models.py`. Модели `payments` и `outbox_events` и ревизия для них находятся в `alembic/versions/`. Для новой БД после запуска PostgreSQL просмотрите `upgrade()` и `downgrade()` ревизии и выполните:
 
 ```powershell
 uv run --locked alembic upgrade head

@@ -4,7 +4,6 @@ from enum import Enum
 
 
 class PaymentStatus(str, Enum):
-    NEW = "new"
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"

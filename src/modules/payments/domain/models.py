@@ -22,7 +22,7 @@ class Payment:
         webhook_url: str,
         metadata_json: dict[str, Any] | None = None,
         id: uuid.UUID | None = None,
-        status: PaymentStatus = PaymentStatus.NEW,
+        status: PaymentStatus = PaymentStatus.PENDING,
         created_at: datetime | None = None,
         processed_at: datetime | None = None,
     ):

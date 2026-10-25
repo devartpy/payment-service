@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.api.app import create_app
 from src.api.dependencies import get_payment_uow_factory
 from src.common.configs import get_fastapi_config
+from src.modules.payments.domain.value_objects import PaymentStatus
 from src.modules.payments.infrastructure.db import models as orm
 from src.modules.payments.infrastructure.repositories import SQLAlchemyOutboxRepository
 
@@ -60,10 +61,11 @@ async def test_create_get_and_duplicate_key_keep_one_outbox(
     assert created.status_code == 202
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
-    assert created.json()["status"] == "new"
+    assert created.json()["status"] == "pending"
     assert created.json()["created_at"].endswith("Z")
     assert fetched.status_code == 200
     assert fetched.json()["amount"] == "12.50"
+    assert fetched.json()["status"] == "pending"
     assert fetched.json()["metadata"] == BODY["metadata"]
     assert fetched.json()["processed_at"] is None
     assert await counts(session_factory) == (1, 1)
@@ -73,6 +75,7 @@ async def test_create_get_and_duplicate_key_keep_one_outbox(
         stored_payment = await session.get(orm.Payment, payment_id)
         stored_event = (await session.scalars(select(orm.OutboxEvent))).one()
     assert stored_payment is not None
+    assert stored_payment.status is PaymentStatus.PENDING
     assert stored_payment.created_at.utcoffset().total_seconds() == 0
     assert stored_event.payload == {"payment_id": str(payment_id)}
     assert stored_event.created_at.utcoffset().total_seconds() == 0

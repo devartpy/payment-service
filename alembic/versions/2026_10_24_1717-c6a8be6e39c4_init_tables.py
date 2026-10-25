@@ -37,9 +37,7 @@ def upgrade() -> None:
         sa.Column("currency", sa.Enum("RUB", "USD", "EUR", name="currency_enum"), nullable=False),
         sa.Column("description", sa.String(length=255), nullable=False),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
-        sa.Column(
-            "status", sa.Enum("NEW", "PENDING", "SUCCEEDED", "FAILED", name="payment_status_enum"), nullable=False
-        ),
+        sa.Column("status", sa.Enum("PENDING", "SUCCEEDED", "FAILED", name="payment_status_enum"), nullable=False),
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
         sa.Column("webhook_url", sa.String(length=512), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),

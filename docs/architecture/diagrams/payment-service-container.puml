@@ -9,21 +9,21 @@ System_Ext(gateway, "Платёжный шлюз", "Внешняя зависи�
 System_Ext(webhook, "Система клиента", "Получает уведомления на webhook URL")
 
 System_Boundary(service, "payment-service") {
-  Container(api, "Payment API", "FastAPI, Pydantic", "Создаёт Payment (NEW) и OutboxEvent в одной транзакции")
+  Container(api, "Payment API", "FastAPI, Pydantic", "Создаёт Payment (PENDING) и OutboxEvent в одной транзакции")
   ContainerDb(db, "Хранилище платежей", "PostgreSQL", "Таблицы payments и outbox")
-  Container(relay, "Outbox publisher", "Python; логическая роль", "Публикует событие; после подтверждения переводит NEW в PENDING и удаляет OutboxEvent")
+  Container(relay, "Outbox publisher", "Python; логическая роль", "Публикует событие; после подтверждения удаляет OutboxEvent")
   ContainerQueue(broker, "Брокер сообщений", "RabbitMQ", "Очереди payments.new и payments.dead_letter; DLX направляет отклонённые сообщения в DLQ")
   Container(consumer, "Payment consumer", "FastStream, Python", "Проверяет статус, эмулирует платёж и отправляет webhook")
 }
 
 Rel(client, api, "Создаёт и запрашивает платежи", "HTTP API")
-Rel(api, db, "Читает платежи; атомарно сохраняет Payment (NEW) и OutboxEvent", "SQLAlchemy")
-Rel(relay, db, "Читает outbox; после подтверждения меняет статус на PENDING и удаляет событие", "SQLAlchemy")
+Rel(api, db, "Читает платежи; атомарно сохраняет Payment (PENDING) и OutboxEvent", "SQLAlchemy")
+Rel(relay, db, "Выбирает outbox с блокировкой; после подтверждения удаляет событие", "SQLAlchemy")
 Rel(relay, broker, "Публикует payments.new; ждёт подтверждения", "RabbitMQ")
 Rel(broker, consumer, "Доставляет исходное сообщение из payments.new", "RabbitMQ")
 Rel(consumer, db, "Проверяет статус; сохраняет SUCCEEDED или FAILED и дату обработки", "SQLAlchemy")
 Rel(consumer, gateway, "При PENDING эмулирует платёж с Idempotency-Key")
 Rel(consumer, webhook, "Отправляет результат; до 3 попыток при сети, таймауте или 5xx", "HTTP webhook")
-Rel(consumer, broker, "При NEW возвращает сообщение в очередь; после 200 подтверждает; при 4xx или исчерпании попыток отклоняет в payments.dead_letter", "RabbitMQ")
+Rel(consumer, broker, "После 200 подтверждает; при 4xx или исчерпании попыток отклоняет в payments.dead_letter", "RabbitMQ")
 
 @enduml

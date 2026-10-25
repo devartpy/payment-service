@@ -22,26 +22,20 @@ else Оба заголовка действительны
     DB --> API: Существующий платеж
     API --> Client: Ответ без создания дубля
   else Новый платеж
-    API -> DB: В одной транзакции сохранить Payment (NEW)\nи OutboxEvent
+    API -> DB: В одной транзакции сохранить Payment (PENDING)\nи OutboxEvent
     DB --> API: payment_id, created_at
-    API --> Client: 202 Accepted, payment_id, NEW, created_at
+    API --> Client: 202 Accepted, payment_id, PENDING, created_at
   end
 end
 
 opt Создан новый платеж
   loop Пока OutboxEvent существует
-    Publisher -> DB: Прочитать ожидающий OutboxEvent
+    Publisher -> DB: Выбрать OutboxEvent\nFOR UPDATE SKIP LOCKED
     DB --> Publisher: Событие о новом платеже
     Publisher ->> Queue: Опубликовать в payments.new
-    opt Ранняя доставка при статусе NEW
-      Queue ->> Consumer: Сообщение о новом платеже
-      Consumer -> DB: Прочитать статус Payment
-      DB --> Consumer: NEW
-      Consumer -> Queue: nack(requeue=true)\nбез вызова шлюза
-    end
     alt Сообщение маршрутизировано и подтверждено RabbitMQ
       Queue --> Publisher: Publisher confirm
-      Publisher -> DB: В одной транзакции Payment NEW → PENDING\nи удалить OutboxEvent
+      Publisher -> DB: Удалить OutboxEvent и зафиксировать транзакцию
       note right of Publisher
         Если транзакция БД не завершилась,
         OutboxEvent остаётся для новой публикации.
@@ -53,10 +47,8 @@ opt Создан новый платеж
 
   Queue ->> Consumer: Доставить или повторно доставить сообщение
   Consumer -> DB: Прочитать Payment по payment_id
-  DB --> Consumer: NEW, PENDING, SUCCEEDED или FAILED
-  alt Статус NEW
-    Consumer -> Queue: nack(requeue=true)\nбез вызова шлюза
-  else Статус PENDING
+  DB --> Consumer: PENDING, SUCCEEDED или FAILED
+  alt Статус PENDING
     Consumer -> Gateway: Эмулировать платёж\n(случайные 2–5 с и исход 90/10)
     alt Успех платежа (90%)
       Gateway --> Consumer: succeeded

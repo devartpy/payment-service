@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -68,7 +68,7 @@ async def test_payment_and_outbox_are_visible_together_only_after_commit(
     assert stored_payment.amount == payment.amount
     assert stored_payment.currency == payment.currency
     assert stored_payment.metadata_json == payment.metadata_json
-    assert stored_payment.status is PaymentStatus.NEW
+    assert stored_payment.status is PaymentStatus.PENDING
     assert stored_payment.created_at.tzinfo is not None
     assert stored_payment.created_at.utcoffset().total_seconds() == 0
     assert stored_event.payload == event.payload
@@ -135,7 +135,7 @@ async def test_duplicate_idempotency_key_does_not_create_second_outbox(
 
 
 @pytest.mark.asyncio
-async def test_status_change_and_outbox_delete_share_rollback_and_commit(
+async def test_outbox_delete_rolls_back_then_commits_without_changing_payment(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     payment = make_payment()
@@ -147,27 +147,32 @@ async def test_status_change_and_outbox_delete_share_rollback_and_commit(
 
     with pytest.raises(RuntimeError, match="publisher failed"):
         async with SQLAlchemyPaymentUnitOfWork(session_factory) as transaction:
-            assert await transaction.payments.update_status(payment.id, PaymentStatus.NEW, PaymentStatus.PENDING)
             assert await transaction.outbox.delete(event.id)
             raise RuntimeError("publisher failed")
 
     async with SQLAlchemyPaymentUnitOfWork(session_factory) as transaction:
         stored_payment = await transaction.payments.get_by_id(payment.id)
         stored_event = await transaction.outbox.get_by_id(event.id)
-    assert stored_payment is not None and stored_payment.status is PaymentStatus.NEW
+    assert stored_payment is not None and stored_payment.status is PaymentStatus.PENDING
     assert stored_event is not None
 
     async with SQLAlchemyPaymentUnitOfWork(session_factory) as transaction:
-        assert await transaction.payments.update_status(payment.id, PaymentStatus.NEW, PaymentStatus.PENDING)
         assert await transaction.outbox.delete(event.id)
         await transaction.commit()
 
     assert await counts(session_factory) == (1, 0)
     async with SQLAlchemyPaymentUnitOfWork(session_factory) as transaction:
         stored_payment = await transaction.payments.get_by_id(payment.id)
-        assert not await transaction.payments.update_status(payment.id, PaymentStatus.NEW, PaymentStatus.PENDING)
         assert not await transaction.outbox.delete(event.id)
     assert stored_payment is not None and stored_payment.status is PaymentStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_payment_status_enum_has_only_current_values(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    async with session_factory() as session:
+        values = (await session.scalars(text("SELECT unnest(enum_range(NULL::payment_status_enum))::text"))).all()
+
+    assert values == ["PENDING", "SUCCEEDED", "FAILED"]
 
 
 @pytest.mark.asyncio
@@ -180,7 +185,7 @@ async def test_processed_at_round_trips_with_utc_offset(session_factory: async_s
 
     async with SQLAlchemyPaymentUnitOfWork(session_factory) as transaction:
         assert await transaction.payments.update_status(
-            payment.id, PaymentStatus.NEW, PaymentStatus.SUCCEEDED, processed_at
+            payment.id, PaymentStatus.PENDING, PaymentStatus.SUCCEEDED, processed_at
         )
         await transaction.commit()
 
@@ -202,7 +207,7 @@ async def test_status_update_without_timestamp_preserves_existing_processed_at(
 
     async with SQLAlchemyPaymentUnitOfWork(session_factory) as transaction:
         assert await transaction.payments.update_status(
-            payment.id, PaymentStatus.NEW, PaymentStatus.SUCCEEDED, processed_at
+            payment.id, PaymentStatus.PENDING, PaymentStatus.SUCCEEDED, processed_at
         )
         await transaction.commit()
 
