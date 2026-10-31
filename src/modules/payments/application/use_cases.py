@@ -8,7 +8,7 @@ import structlog
 
 from src.common.exceptions import ApplicationException
 from src.modules.payments.application.dtos import CreatePaymentCommand
-from src.modules.payments.application.exceptions import IdempotencyConflictError, PaymentNotFoundError
+from src.modules.payments.application.exceptions import PaymentNotFoundError
 from src.modules.payments.application.interfaces import OutboxPublisher, PaymentGateway, PaymentUnitOfWork
 from src.modules.payments.domain.exceptions import PaymentDomainException
 from src.modules.payments.domain.models import OutboxEvent, Payment
@@ -27,8 +27,8 @@ class CreatePayment:
             async with self._uow_factory() as uow:
                 existing = await uow.payments.get_by_idempotency_key(command.idempotency_key)
                 if existing is not None:
-                    logger.warning("payment_idempotency_conflict", payment_id=str(existing.id))
-                    raise IdempotencyConflictError()
+                    logger.info("payment_idempotency_replay", payment_id=str(existing.id))
+                    return existing
 
                 payment = Payment(
                     amount=command.amount,

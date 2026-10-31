@@ -59,8 +59,8 @@ async def test_create_get_and_duplicate_key_keep_one_outbox(
         )
 
     assert created.status_code == 202
-    assert duplicate.status_code == 409
-    assert duplicate.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+    assert duplicate.status_code == 202
+    assert duplicate.json() == created.json()
     assert created.json()["status"] == "pending"
     assert created.json()["created_at"].endswith("Z")
     assert fetched.status_code == 200
@@ -82,23 +82,19 @@ async def test_create_get_and_duplicate_key_keep_one_outbox(
 
 
 @pytest.mark.asyncio
-async def test_conflicting_replay_keeps_one_outbox(
+async def test_replay_with_different_body_returns_original_payment_and_keeps_one_outbox(
     payment_app: FastAPI,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=payment_app), base_url="http://test") as client:
         first = await client.post("/api/v1/payments", headers=HEADERS, json=BODY)
-        conflict = await client.post(
+        replay = await client.post(
             "/api/v1/payments", headers=HEADERS, json={**BODY, "description": "Different payment"}
         )
 
     assert first.status_code == 202
-    assert conflict.status_code == 409
-    assert conflict.json()["error"] == {
-        "code": "IDEMPOTENCY_CONFLICT",
-        "message": "Ключ идемпотентности уже использован",
-        "meta": {},
-    }
+    assert replay.status_code == 202
+    assert replay.json() == first.json()
     assert await counts(session_factory) == (1, 1)
 
 

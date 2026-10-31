@@ -8,7 +8,6 @@ import pytest
 from structlog.testing import capture_logs
 
 from src.modules.payments.application.dtos import CreatePaymentCommand
-from src.modules.payments.application.exceptions import IdempotencyConflictError
 from src.modules.payments.application.interfaces import PaymentUnitOfWork
 from src.modules.payments.application.use_cases import CreatePayment
 from src.modules.payments.domain.models import Payment
@@ -67,7 +66,7 @@ def command() -> CreatePaymentCommand:
 
 
 @pytest.mark.asyncio
-async def test_existing_key_returns_conflict_without_new_write() -> None:
+async def test_existing_key_returns_payment_without_new_write() -> None:
     request = command()
     existing = Payment(
         amount=request.amount,
@@ -81,9 +80,9 @@ async def test_existing_key_returns_conflict_without_new_write() -> None:
     factory = cast(Callable[[], PaymentUnitOfWork], lambda: transaction)
 
     with capture_logs() as logs:
-        with pytest.raises(IdempotencyConflictError):
-            await CreatePayment(factory).execute(request)
+        result = await CreatePayment(factory).execute(request)
 
+    assert result is existing
     assert transaction.commits == 0
     assert transaction.payments.added == []
     assert transaction.outbox.added == []
