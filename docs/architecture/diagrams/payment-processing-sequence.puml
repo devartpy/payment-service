@@ -6,6 +6,8 @@ boundary "Payment API" as API
 database "PostgreSQL\n(payments, outbox)" as DB
 participant "Outbox publisher\n(один процесс)" as Publisher
 queue "RabbitMQ\npayments.new" as Queue
+queue "RabbitMQ\nwebhook.ready" as WebhookQueue
+queue "RabbitMQ\nwebhook.retry.1 / 2s" as RetryQueue
 participant "Payment consumer" as Consumer
 participant "Платежный шлюз\n(эмуляция)" as Gateway
 participant "Webhook клиента" as Webhook
@@ -61,25 +63,24 @@ opt Создан новый платеж
     note right of Consumer: Не вызывать шлюз повторно
   end
 
-  opt Статус SUCCEEDED или FAILED
-    Consumer -> DB: Прочитать актуальный конечный статус
-    loop До 3 попыток; повтор с экспоненциальной задержкой\nтолько после сети, таймаута или 5xx
-      Consumer -> Webhook: POST результат платежа на URL мерчанта
-      Webhook --> Consumer: 200, 4xx или сеть / таймаут / 5xx
-    end
-    alt Ответ 200 OK
-      Consumer -> Queue: ack исходного сообщения
-    else Ответ 4xx
-      Consumer -> Queue: nack(requeue=false) исходного сообщения
-      Queue ->> DLQ: Передать через dead-letter exchange
-    else Сеть, таймаут или 5xx после 3 попыток
-      Consumer -> Queue: nack(requeue=false) исходного сообщения
-      Queue ->> DLQ: Передать через dead-letter exchange
-    end
-    opt Сообщение попало в DLQ
-      DLQ ->> Consumer: Доставить исходное сообщение второму subscriber
-      Consumer -> DLQ: Лог CRITICAL и ack
-    end
+  Consumer ->> WebhookQueue: Опубликовать payment_id, attempt=1\npersistent, mandatory
+  WebhookQueue --> Consumer: Publisher confirm
+  Consumer -> Queue: ack исходного сообщения
+  WebhookQueue ->> Consumer: Доставить задачу subscriber webhook
+  Consumer -> DB: Прочитать конечный Payment
+  Consumer -> Webhook: Одна HTTP POST попытка
+  alt Ответ 200 OK
+    Consumer -> WebhookQueue: ack задачи
+  else Сеть, таймаут или 5xx, попытка меньше 3
+    Consumer ->> RetryQueue: Опубликовать attempt+1\nв очередь TTL 1 или 2 с
+    RetryQueue --> Consumer: Publisher confirm
+    Consumer -> WebhookQueue: ack текущей задачи
+    RetryQueue ->> WebhookQueue: TTL истёк; DLX возвращает задачу
+  else 4xx, иной отказ или третья временная ошибка
+    Consumer -> WebhookQueue: reject(requeue=false)
+    WebhookQueue ->> DLQ: Передать через DLX
+    DLQ ->> Consumer: Доставить subscriber DLQ
+    Consumer -> DLQ: Лог CRITICAL и ack
   end
 end
 @enduml

@@ -3,7 +3,7 @@
 import uuid
 from abc import abstractmethod
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 
 from src.common.unit_of_work import AbstractUnitOfWork
 from src.modules.payments.domain.models import OutboxEvent, Payment
@@ -72,8 +72,8 @@ class PaymentGateway(Protocol):
 class WebhookNotifier(Protocol):
     """Отправка уведомления о конечном статусе."""
 
-    async def notify(self, payment: Payment) -> bool:
-        """True только после HTTP 200; False означает отказ после разрешённых попыток."""
+    async def notify(self, payment: Payment) -> Literal["success", "transient_failure", "permanent_failure"]:
+        """Результат одной HTTP-попытки доставки."""
 
 
 class OutboxPublisher(Protocol):

@@ -20,13 +20,21 @@ def create_consumer_app(rabbit_broker: RabbitBroker) -> FastStream:
     async def startup_event() -> None:
         logger.info(
             "payment_consumer_starting",
-            queues=(payment_consumer.NEW_QUEUE.name, payment_consumer.DLQ_QUEUE.name),
+            queues=(
+                payment_consumer.NEW_QUEUE.name,
+                payment_consumer.WEBHOOK_QUEUE.name,
+                payment_consumer.DLQ_QUEUE.name,
+            ),
         )
 
     @faststream_app.on_shutdown
     async def shutdown_event() -> None:
         await payment_consumer.engine.dispose()
         logger.info("payment_consumer_shutdown_completed")
+
+    @faststream_app.after_startup
+    async def declare_webhook_retries() -> None:
+        await payment_consumer.declare_retry_queues(rabbit_broker)
 
     return faststream_app
 

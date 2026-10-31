@@ -38,7 +38,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/payments -Heade
 - `POST /api/v1/payments` и `GET /api/v1/payments/{payment_id}` с проверкой `X-API-Key`.
 - Обязательный `Idempotency-Key` для POST и отказ при повторном использовании ключа.
 - Общий формат ошибок и атомарный `commit` платежа с outbox через SQLAlchemy Unit of Work.
-- FastStream consumer: эмуляция шлюза со случайным исходом 90/10, конечный статус, webhook до трёх попыток; второй subscriber логирует и подтверждает сообщения из DLQ.
+- FastStream consumer: эмуляция шлюза со случайным исходом 90/10 и конечным статусом; отдельный subscriber доставляет webhook до трёх попыток через очереди задержки, subscriber DLQ логирует и подтверждает окончательные отказы.
 - Outbox relay: публикация с RabbitMQ confirm и проверкой маршрута, затем отдельный `commit` удаления для каждого события. После сбоя commit публикация может повториться.
 - Интеграционные и HTTP-тесты на PostgreSQL с изоляцией во временных схемах; проверки consumer на одном RabbitMQ с отдельными очередями тестов.
 

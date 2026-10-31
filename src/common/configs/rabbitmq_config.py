@@ -10,6 +10,9 @@ PAYMENTS_EXCHANGE = "payments"
 PAYMENTS_NEW_QUEUE = "payments.new"
 PAYMENTS_DLX = "payments.dlx"
 PAYMENTS_DLQ = "payments.dead_letter"
+WEBHOOK_READY_QUEUE = "webhook.ready"
+WEBHOOK_RETRY_1_QUEUE = "webhook.retry.1"
+WEBHOOK_RETRY_2_QUEUE = "webhook.retry.2"
 
 
 class RabbitMQConfig(CommonConfig):

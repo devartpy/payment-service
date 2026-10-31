@@ -16,29 +16,22 @@ else (SUCCEEDED или FAILED)
   :Пропустить вызов шлюза;
 endif
 
-:Прочитать актуальный конечный статус из БД;
-:Установить счётчик попыток webhook = 0;
-while (Попыток webhook меньше 3?) is (да)
-  :Отправить HTTP POST webhook;
-  :Увеличить счётчик попыток webhook;
-  if (Ответ 200 OK?) then (да)
-    :ack исходного сообщения;
-    stop
-  else (нет)
-    if (Ответ 4xx?) then (да)
-      :nack(requeue=false) исходного сообщения;
-      :RabbitMQ переводит его в payments.dead_letter через DLX;
-      :Второй subscriber логирует CRITICAL\nи подтверждает сообщение DLQ;
-      stop
-    else (сеть, таймаут или 5xx)
-      if (Остались попытки?) then (да)
-        :Выждать экспоненциальную задержку;
-      endif
-    endif
+:Опубликовать задачу attempt=1 в webhook.ready;
+:Дождаться publisher confirm и ack payments.new;
+:Subscriber webhook.ready читает Payment из БД;
+:Отправить один HTTP POST webhook;
+if (Ответ 200 OK?) then (да)
+  :ack задачи webhook;
+else (нет)
+  if (Временная ошибка и attempt < 3?) then (да)
+    :Опубликовать attempt+1 в очередь TTL 1 или 2 с;
+    :Дождаться confirm и ack текущей задачи;
+    :RabbitMQ вернёт задачу в webhook.ready через DLX;
+  else (окончательный отказ)
+    :reject(requeue=false) задачи webhook;
+    :RabbitMQ переводит её в payments.dead_letter;
+    :Subscriber DLQ логирует CRITICAL и ack;
   endif
-endwhile (нет)
-:nack(requeue=false) исходного сообщения;
-:RabbitMQ переводит его в payments.dead_letter через DLX;
-:Второй subscriber логирует CRITICAL\nи подтверждает сообщение DLQ;
+endif
 stop
 @enduml
