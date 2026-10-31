@@ -6,20 +6,19 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
 from uuid import uuid4
 
 import httpx
 import pytest
 from faststream import AckPolicy
-from faststream.rabbit import Channel, ExchangeType, RabbitBroker, RabbitExchange, RabbitMessage, RabbitQueue
+from faststream.rabbit import Channel, ExchangeType, RabbitBroker, RabbitExchange, RabbitQueue
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.common.configs import get_rabbitmq_config
 from src.modules.payments.domain.models import Payment
 from src.modules.payments.domain.value_objects import Currency, PaymentStatus
 from src.modules.payments.infrastructure import consumer as consumer_module
-from src.modules.payments.infrastructure.consumer import handle_failed_payments_dlq, handle_payment, handle_webhook
+from src.modules.payments.infrastructure.consumer import handle_payment, handle_webhook
 from src.modules.payments.infrastructure.unit_of_work import SQLAlchemyPaymentUnitOfWork
 from src.modules.payments.infrastructure.webhook import HTTPWebhookNotifier
 
@@ -59,7 +58,6 @@ class RabbitCase:
     retries: tuple[RabbitQueue, RabbitQueue]
     dlq: RabbitQueue
     dlx: RabbitExchange
-    dead_letters: asyncio.Queue[tuple[bytes, dict[str, Any]]]
 
 
 @pytest.fixture
@@ -97,15 +95,8 @@ async def rabbit_case() -> AsyncIterator[RabbitCase]:
         get_rabbitmq_config().url,
         default_channel=Channel(prefetch_count=1, publisher_confirms=True, on_return_raises=True),
     )
-    dead_letters: asyncio.Queue[tuple[bytes, dict[str, Any]]] = asyncio.Queue()
-
-    @broker.subscriber(dlq, dlx, ack_policy=AckPolicy.ACK)
-    async def handle_dead_letter(payload: dict[str, object], message: RabbitMessage) -> None:
-        await handle_failed_payments_dlq(payload)
-        dead_letters.put_nowait((message.raw_message.body, message.headers))
-
     try:
-        yield RabbitCase(broker, exchange, source, webhook, retries, dlq, dlx, dead_letters)
+        yield RabbitCase(broker, exchange, source, webhook, retries, dlq, dlx)
     finally:
         await broker.stop()
         await broker.connect()
@@ -162,6 +153,9 @@ def configure_handlers(
 
 async def start_case(rabbit_case: RabbitCase) -> None:
     await rabbit_case.broker.start()
+    dlx = await rabbit_case.broker.declare_exchange(rabbit_case.dlx)
+    dlq = await rabbit_case.broker.declare_queue(rabbit_case.dlq)
+    await dlq.bind(dlx, routing_key=rabbit_case.dlq.routing_key)
     exchange = await rabbit_case.broker.declare_exchange(rabbit_case.exchange)
     for retry in rabbit_case.retries:
         queue = await rabbit_case.broker.declare_queue(retry)
@@ -228,8 +222,20 @@ async def test_webhook_failure_dead_letters_webhook_message(
             exchange=rabbit_case.exchange,
             persist=True,
         )
-        dead_body, dead_headers = await asyncio.wait_for(rabbit_case.dead_letters.get(), timeout=5)
-    assert json.loads(dead_body) == {"payment_id": str(payment.id), "attempt": expected_attempts}
-    assert dead_headers["x-death"][0]["reason"] == "rejected"
+        queue = await rabbit_case.broker.declare_queue(rabbit_case.dlq)
+
+        async def read_dead_letter():
+            while True:
+                message = await queue.get(fail=False)
+                if message is not None:
+                    return message
+                await asyncio.sleep(0.05)
+
+        dead_message = await asyncio.wait_for(read_dead_letter(), timeout=5)
+        try:
+            assert json.loads(dead_message.body) == {"payment_id": str(payment.id), "attempt": expected_attempts}
+            assert dead_message.headers["x-death"][0]["reason"] == "rejected"
+        finally:
+            await dead_message.ack()
     assert gateway.calls == 1
     assert attempts == expected_attempts

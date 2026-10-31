@@ -86,6 +86,19 @@ async def declare_retry_queues(rabbit_broker: RabbitBroker = broker) -> None:
     logger.info("webhook_retry_topology_ready")
 
 
+async def declare_dead_letter_queue(rabbit_broker: RabbitBroker = broker) -> None:
+    """Declare the durable DLQ without consuming its messages."""
+    logger.debug("payment_dead_letter_topology_declaring")
+    try:
+        exchange = await rabbit_broker.declare_exchange(DLX_EXCHANGE)
+        queue = await rabbit_broker.declare_queue(DLQ_QUEUE)
+        await queue.bind(exchange, routing_key=PAYMENTS_DLQ)
+    except Exception as error:
+        logger.error("payment_dead_letter_topology_failed", error_type=type(error).__name__)
+        raise
+    logger.info("payment_dead_letter_topology_ready", queue=PAYMENTS_DLQ)
+
+
 async def publish_webhook_task(payment_id: UUID, attempt: int, routing_key: str) -> None:
     logger.debug("webhook_task_publish_started", payment_id=str(payment_id), attempt=attempt, routing_key=routing_key)
     confirmation = await broker.publish(
@@ -99,12 +112,6 @@ async def publish_webhook_task(payment_id: UUID, attempt: int, routing_key: str)
     if not isinstance(confirmation, Basic.Ack):
         raise RuntimeError("Webhook task publication was not confirmed")
     logger.info("webhook_task_published", payment_id=str(payment_id), attempt=attempt, routing_key=routing_key)
-
-
-@broker.subscriber(DLQ_QUEUE, DLX_EXCHANGE, ack_policy=AckPolicy.ACK)
-async def handle_failed_payments_dlq(payload: dict[str, object]) -> None:
-    """Зафиксировать ошибку доставки; FastStream подтвердит сообщение."""
-    logger.critical("payment_dead_letter_received", payment_id=str(payload.get("payment_id")))
 
 
 @broker.subscriber(NEW_QUEUE, NEW_EXCHANGE, ack_policy=AckPolicy.REJECT_ON_ERROR)

@@ -26,15 +26,14 @@ def create_consumer_app(rabbit_broker: RabbitBroker) -> FastStream:
                 payment_consumer.DLQ_QUEUE.name,
             ),
         )
+        await rabbit_broker.connect()
+        await payment_consumer.declare_dead_letter_queue(rabbit_broker)
+        await payment_consumer.declare_retry_queues(rabbit_broker)
 
     @faststream_app.on_shutdown
     async def shutdown_event() -> None:
         await payment_consumer.engine.dispose()
         logger.info("payment_consumer_shutdown_completed")
-
-    @faststream_app.after_startup
-    async def declare_webhook_retries() -> None:
-        await payment_consumer.declare_retry_queues(rabbit_broker)
 
     return faststream_app
 

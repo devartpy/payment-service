@@ -86,7 +86,7 @@
    uv run --locked python -m src.publisher.main
    ```
 
-   Подписчики consumer создают durable exchange `payments`, очередь `payments.new`, DLX `payments.dlx` и очередь `payments.dead_letter`. Publisher не объявляет топологию: он читает outbox и публикует событие `{"payment_id":"<UUID>"}` в готовую очередь. Второй подписчик consumer логирует попадание сообщения в DLQ на уровне CRITICAL и подтверждает его.
+   Consumer создаёт durable exchange `payments`, рабочие очереди `payments.new` и `webhook.ready`, DLX `payments.dlx` и durable очередь `payments.dead_letter`. Publisher не объявляет топологию: он читает outbox и публикует событие `{"payment_id":"<UUID>"}` в готовую очередь. У DLQ нет подписчика; отклонённые сообщения остаются в ней для разбора.
 
 5. Откройте `http://127.0.0.1:8000/docs` или проверьте доступность схемы:
 

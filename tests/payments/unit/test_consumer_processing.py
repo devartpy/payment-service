@@ -17,7 +17,7 @@ from src.modules.payments.domain.models import Payment
 from src.modules.payments.domain.value_objects import Currency, PaymentStatus
 from src.modules.payments.infrastructure import consumer as consumer_module
 from src.modules.payments.infrastructure import gateway as gateway_module
-from src.modules.payments.infrastructure.consumer import handle_failed_payments_dlq, handle_payment, handle_webhook
+from src.modules.payments.infrastructure.consumer import handle_payment, handle_webhook
 from src.modules.payments.infrastructure.gateway import SimulatedPaymentGateway
 from src.modules.payments.infrastructure.webhook import HTTPWebhookNotifier
 
@@ -170,6 +170,32 @@ async def test_retry_queues_have_ttl_and_return_to_webhook_ready() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dead_letter_queue_is_declared_and_bound_without_subscriber() -> None:
+    calls: list[tuple[str, object]] = []
+
+    class Queue:
+        async def bind(self, exchange: object, *, routing_key: str) -> None:
+            calls.append(("bind", (exchange, routing_key)))
+
+    class Broker:
+        async def declare_exchange(self, exchange: object) -> object:
+            calls.append(("exchange", exchange))
+            return exchange
+
+        async def declare_queue(self, queue: object) -> Queue:
+            calls.append(("queue", queue))
+            return Queue()
+
+    await consumer_module.declare_dead_letter_queue(Broker())
+    assert calls == [
+        ("exchange", consumer_module.DLX_EXCHANGE),
+        ("queue", consumer_module.DLQ_QUEUE),
+        ("bind", (consumer_module.DLX_EXCHANGE, consumer_module.PAYMENTS_DLQ)),
+    ]
+    assert consumer_module.DLQ_QUEUE.durable
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("result", "attempt", "routing_key", "rejected"),
     [
@@ -257,11 +283,3 @@ async def test_invalid_messages_are_rejected() -> None:
     for payload in ({"payment_id": "invalid", "attempt": 1}, {"payment_id": str(uuid4()), "attempt": 4}):
         with pytest.raises(RejectMessage):
             await handle_webhook(payload)
-
-
-@pytest.mark.asyncio
-async def test_dead_letter_subscriber_logs_and_acknowledges() -> None:
-    payment_id = str(uuid4())
-    with capture_logs() as logs:
-        await handle_failed_payments_dlq({"payment_id": payment_id})
-    assert any(log["event"] == "payment_dead_letter_received" and log["payment_id"] == payment_id for log in logs)

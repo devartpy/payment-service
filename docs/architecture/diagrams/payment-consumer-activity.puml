@@ -30,7 +30,7 @@ else (нет)
   else (окончательный отказ)
     :reject(requeue=false) задачи webhook;
     :RabbitMQ переводит её в payments.dead_letter;
-    :Subscriber DLQ логирует CRITICAL и ack;
+    :Сообщение остаётся в DLQ для разбора;
   endif
 endif
 stop

@@ -79,8 +79,7 @@ opt Создан новый платеж
   else 4xx, иной отказ или третья временная ошибка
     Consumer -> WebhookQueue: reject(requeue=false)
     WebhookQueue ->> DLQ: Передать через DLX
-    DLQ ->> Consumer: Доставить subscriber DLQ
-    Consumer -> DLQ: Лог CRITICAL и ack
+    note right of DLQ: Сообщение остаётся для разбора
   end
 end
 @enduml
